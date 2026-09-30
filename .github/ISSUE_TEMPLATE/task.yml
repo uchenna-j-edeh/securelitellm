@@ -1,0 +1,22 @@
+name: Task
+description: A unit of work (0.5–2 days)
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: One or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Acceptance criteria
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / links
