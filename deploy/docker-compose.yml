@@ -1,0 +1,31 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    command: --config /app/config.yaml --port 4000 --detailed_debug
+    environment:
+      - LITELLM_MASTER_KEY=sk-master-key-local-dev
+    depends_on:
+      mock-model:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mock-model:
+    build:
+      context: ./mock_model
+    ports:
+      - "8001:8001"
+    environment:
+      - MOCK_SCRIPT=${MOCK_SCRIPT:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

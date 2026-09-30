@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# uv
+uv.lock
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Results / data
+eval/results/
+*.csv
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
