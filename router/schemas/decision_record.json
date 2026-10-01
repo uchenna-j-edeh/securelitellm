@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "decision_record",
+  "title": "RouterDecisionRecord",
+  "description": "One record emitted per LLM request by the router hook (JSONL).",
+  "type": "object",
+  "required": ["ts", "session_id", "request_id", "mode", "level", "features", "risk_score", "action", "latency_ms"],
+  "additionalProperties": true,
+  "properties": {
+    "ts":         { "type": "string", "format": "date-time", "description": "UTC timestamp (ISO-8601)" },
+    "session_id": { "type": "string", "description": "Agent run ID (x-agent-run-id header or fallback)" },
+    "request_id": { "type": "string", "description": "litellm_call_id or generated UUID" },
+    "mode":       { "type": "string", "enum": ["stateless", "session"] },
+    "level":      { "type": "string", "enum": ["L0", "L1", "L2", "L3"] },
+    "features":   {
+      "type": "object",
+      "description": "Feature set available at the active level (populated M2+)",
+      "properties": {
+        "untrusted_seen":          { "type": "boolean" },
+        "sink_requested":          { "type": "boolean" },
+        "source_ids":              { "type": "array",  "items": { "type": "string" } },
+        "source_trust_tiers":      { "type": "object" },
+        "classifier_verdicts":     { "type": "object" },
+        "tainted_spans_in_sink_args": { "type": "boolean" }
+      }
+    },
+    "risk_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "action":     { "type": "string", "enum": ["allow", "route-hardened", "strip-tools", "block"] },
+    "latency_ms": { "type": "number", "minimum": 0, "description": "Hook processing time in milliseconds" },
+    "tool_context": {
+      "type": "object",
+      "description": "Parsed tool call and tool result counts from the request messages",
+      "properties": {
+        "tool_result_count": { "type": "integer" },
+        "tool_call_count":   { "type": "integer" },
+        "tool_results":      { "type": "array" },
+        "tool_calls":        { "type": "array" }
+      }
+    }
+  }
+}
