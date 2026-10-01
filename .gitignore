@@ -25,3 +25,6 @@ eval/results/
 
 # macOS
 .DS_Store
+
+# Local notes
+progress-summary.md
