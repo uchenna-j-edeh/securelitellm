@@ -5,9 +5,14 @@ services:
       - "4000:4000"
     volumes:
       - ./litellm_config.yaml:/app/config.yaml:ro
+      - ..:/workspace:ro           # router/ package available via PYTHONPATH
     command: --config /app/config.yaml --port 4000 --detailed_debug
     environment:
       - LITELLM_MASTER_KEY=sk-master-key-local-dev
+      - PYTHONPATH=/workspace
+      - ROUTER_MODE=${ROUTER_MODE:-stateless}
+      - ROUTER_LEVEL=${ROUTER_LEVEL:-L0}
+      - ROUTER_LOG_PATH=${ROUTER_LOG_PATH:--}   # default: stdout
     depends_on:
       mock-model:
         condition: service_healthy
