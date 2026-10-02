@@ -10,4 +10,4 @@ litellm_settings:
   callbacks: ["router.hook.proxy_handler_instance"]
 
 general_settings:
-  master_key: "sk-master-key-local-dev"
+  master_key: os.environ/LITELLM_MASTER_KEY
