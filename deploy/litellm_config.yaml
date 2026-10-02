@@ -5,15 +5,33 @@ model_list:
       api_base: http://mock-model:8001/v1
       api_key: "sk-fake"
 
-  # Free tier — swap model name to upgrade to paid providers:
-  #   groq/llama-3.3-70b-versatile   (Groq, free)
-  #   gemini/gemini-1.5-flash         (Google, paid)
-  #   anthropic/claude-3-5-haiku-20241022  (Anthropic, paid)
-  #   openai/gpt-4o-mini              (OpenAI, paid)
-  - model_name: llm
+  # ── Groq (free tier) ────────────────────────────────────────
+  # Key: https://console.groq.com  →  GROQ_API_KEY
+  - model_name: groq
     litellm_params:
       model: groq/llama-3.3-70b-versatile
       api_key: os.environ/GROQ_API_KEY
+
+  # ── Google Gemini (free tier via AI Studio) ──────────────────
+  # Key: https://aistudio.google.com  →  GEMINI_API_KEY
+  - model_name: gemini
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ── Anthropic Claude (paid) ───────────────────────────────────
+  # Key: https://console.anthropic.com  →  ANTHROPIC_API_KEY
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── OpenAI (paid) ─────────────────────────────────────────────
+  # Key: https://platform.openai.com  →  OPENAI_API_KEY
+  - model_name: gpt
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
 
 litellm_settings:
   drop_params: true

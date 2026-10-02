@@ -11,6 +11,9 @@ services:
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - PYTHONPATH=/workspace
       - ROUTER_MODE=${ROUTER_MODE:-stateless}
       - ROUTER_LEVEL=${ROUTER_LEVEL:-L0}
