@@ -9,7 +9,7 @@ model_list:
   # Key: https://console.groq.com  →  GROQ_API_KEY
   - model_name: groq
     litellm_params:
-      model: groq/llama-3.3-70b-versatile
+      model: groq/qwen/qwen3.8-27b
       api_key: os.environ/GROQ_API_KEY
 
   # ── Google Gemini (free tier via AI Studio) ──────────────────
