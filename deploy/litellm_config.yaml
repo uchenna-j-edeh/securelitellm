@@ -5,6 +5,16 @@ model_list:
       api_base: http://mock-model:8001/v1
       api_key: "sk-fake"
 
+  # Free tier — swap model name to upgrade to paid providers:
+  #   groq/llama-3.3-70b-versatile   (Groq, free)
+  #   gemini/gemini-1.5-flash         (Google, paid)
+  #   anthropic/claude-3-5-haiku-20241022  (Anthropic, paid)
+  #   openai/gpt-4o-mini              (OpenAI, paid)
+  - model_name: llm
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
 litellm_settings:
   drop_params: true
   callbacks: ["router.hook.proxy_handler_instance"]
