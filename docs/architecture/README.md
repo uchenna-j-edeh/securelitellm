@@ -56,3 +56,18 @@ The same routing pipeline is used to generate evaluation data across all four co
 | 8 | **Config / Level Loader** | Selects context-richness Level 0–3, thresholds | YAML + Pydantic schema |
 | 9 | **Attack Corpus** | Versioned scenarios tagged to taxonomy | YAML/JSON: `{steps[], expected_label, taxonomy_ref}` |
 | 10 | **Eval Harness** | Replay corpus, collect metrics, run significance tests | `run(corpus, level) -> Metrics`; `report(metrics)` |
+
+---
+
+## Milestone Mapping
+
+| Milestone | Target | Components delivered | Tracking issues |
+|-----------|--------|----------------------|-----------------|
+| **M0 Foundations** | Oct 9 | Repo skeleton, Docker stack, CI | — |
+| **M1 Hook Skeleton** | Oct 16 | #2 Security Router (pass-through), #8 Config/Level Loader (basic) | ✅ merged |
+| **M2 Session & Taint** | Oct 30 | #4 Session Taint Store, #7 Sink Inspector, #8 Level feature extraction | #14 #15 #16 #17 #18 #19 #20 #59 |
+| **M3 Classifiers** | Nov 6 | #3 Classifier Adapter (PromptGuard 2 + LLM Guard), L2 features live | #22 #23 #24 #25 #26 #27 |
+| **M4 Risk Policy & Routing** | Nov 13 | #5 Risk + Routing Engine, #6 Routing Policy, L3 correlation, eBPF go/no-go | #29 #30 #31 #32 #33 #34 |
+| **M5 Attack Corpus** *(parallel from Oct 19)* | Nov 13 | #9 Attack Corpus | #36 #37 #38 #39 #40 #41 #42 |
+| **M6 Eval Harness** | Nov 24 | #10 Eval Harness, matrix runner, metrics | #43 #44 #45 #46 #47 |
+| **M7 Analysis & Write-up** | Dec 11 | Figures, paper, demo, final presentation | #48 #49 #50 #51 #52 |
