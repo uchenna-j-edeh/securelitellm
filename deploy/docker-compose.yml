@@ -1,14 +1,15 @@
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    # Pin the exact image used for the verified M1 environment.
+    image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     volumes:
       - ./litellm_config.yaml:/app/config.yaml:ro
       - ..:/workspace:ro           # router/ package available via PYTHONPATH
-    command: --config /app/config.yaml --port 4000 --detailed_debug
+    command: --config /app/config.yaml --port 4000
     environment:
-      - LITELLM_MASTER_KEY=sk-master-key-local-dev
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
       - PYTHONPATH=/workspace
       - ROUTER_MODE=${ROUTER_MODE:-stateless}
       - ROUTER_LEVEL=${ROUTER_LEVEL:-L0}
@@ -26,7 +27,7 @@ services:
     build:
       context: ./mock_model
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     environment:
       - MOCK_SCRIPT=${MOCK_SCRIPT:-}
     healthcheck:

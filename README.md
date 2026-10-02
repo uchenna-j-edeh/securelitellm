@@ -18,21 +18,30 @@ git clone git@github.com:uchenna-j-edeh/securelitellm.git
 cd securelitellm
 
 # 2. Install Python deps
-uv sync --all-groups
+uv sync --locked --all-groups
 
-# 3. Lint and test
+# 3. Create a private local configuration
+cp .env.example .env
+# Edit .env and replace the placeholder with a unique, long random value.
+
+# 4. Load the key for the verification commands below
+set -a
+source .env
+set +a
+
+# 5. Lint and test
 make lint test
 
-# 4. Start the stack
+# 6. Start the stack
 make up
 
-# 5. Send a completion
+# 7. Send a completion
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-master-key-local-dev" \
+  -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
   -d '{"model":"mock","messages":[{"role":"user","content":"hello"}]}'
 
-# 6. Stop services
+# 8. Stop services
 make down
 ```
 
@@ -45,14 +54,14 @@ make down
 | Tool | Version | Install |
 |---|---|---|
 | Python | ≥ 3.11 | [python.org](https://www.python.org/downloads/) or `brew install python@3.11` |
-| uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| uv | 0.12.21 | `curl -LsSf https://astral.sh/uv/0.12.21/install.sh \| sh` |
 | Docker Desktop | latest | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) |
 | git | any | pre-installed on macOS / `brew install git` |
 | gh (GitHub CLI) | any | `brew install gh` — only needed for repo setup |
 
 ### Python packages
 
-All Python dependencies are declared in `pyproject.toml` and installed by `uv sync`. No manual `pip install` needed.
+All Python dependencies are declared in `pyproject.toml`, resolved to exact versions in the committed `uv.lock`, and installed by `uv sync --locked`. No manual `pip install` needed.
 
 | Package | Purpose |
 |---|---|
@@ -68,7 +77,7 @@ All Python dependencies are declared in `pyproject.toml` and installed by `uv sy
 Install everything:
 
 ```bash
-uv sync --all-groups
+uv sync --locked --all-groups
 ```
 
 ---
@@ -80,10 +89,22 @@ Follow these steps in order to verify the full stack is working correctly after 
 ### Step 1 — Install dependencies
 
 ```bash
-uv sync --all-groups
+uv sync --locked --all-groups
 ```
 
 Expected: resolves and installs all packages with no errors.
+
+Create a private local configuration and load it into the current shell:
+
+```bash
+cp .env.example .env
+# Replace the placeholder in .env with a unique, long random value.
+set -a
+source .env
+set +a
+```
+
+The `.env` file is ignored by Git. Never commit the real key.
 
 ### Step 2 — Lint and unit tests
 
@@ -91,7 +112,7 @@ Expected: resolves and installs all packages with no errors.
 make lint test
 ```
 
-Expected: `All checks passed!` from ruff, `20 passed` from pytest (as of M1).
+Expected: `All checks passed!` from ruff, `26 passed` from pytest (as of M1).
 
 ### Step 3 — Start the stack
 
@@ -128,7 +149,7 @@ Expected: `"I'm alive!"`
 
 ```bash
 curl http://localhost:4000/health \
-  -H "Authorization: Bearer sk-master-key-local-dev"
+  -H "Authorization: Bearer ${LITELLM_MASTER_KEY}"
 ```
 
 Expected: `healthy_count: 1`, `unhealthy_count: 0`, mock endpoint listed.
@@ -138,7 +159,7 @@ Expected: `healthy_count: 1`, `unhealthy_count: 0`, mock endpoint listed.
 ```bash
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-master-key-local-dev" \
+  -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
   -d '{"model":"mock","messages":[{"role":"user","content":"hello"}]}'
 ```
 
@@ -174,7 +195,7 @@ Expected: a JSONL decision record with all required fields:
 ```bash
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-master-key-local-dev" \
+  -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
   -H "x-agent-run-id: verify-run-001" \
   -d '{"model":"mock","messages":[{"role":"user","content":"session test"}]}'
 ```
@@ -194,7 +215,7 @@ Send a multi-turn message that includes a tool result (source) and a tool call (
 ```bash
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-master-key-local-dev" \
+  -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
   -H "x-agent-run-id: verify-run-002" \
   -d '{
     "model": "mock",
@@ -249,6 +270,7 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 
 | Variable | Default | Options |
 |---|---|---|
+| `LITELLM_MASTER_KEY` | none (required) | unique local secret stored in `.env` |
 | `ROUTER_MODE` | `stateless` | `stateless`, `session` |
 | `ROUTER_LEVEL` | `L0` | `L0`, `L1`, `L2`, `L3` |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path |
