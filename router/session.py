@@ -46,7 +46,8 @@ class SessionStore:
             s = self._store.setdefault(session_id, SessionState(session_id=session_id))
             s.sources.append(source)
             s.tainted = True
-            raw = str(source.get("content", ""))
+            # classify_sources stores content under "content_preview"; fall back to "content"
+            raw = str(source.get("content_preview") or source.get("content", ""))
             s.tainted_spans.append(hashlib.sha256(raw.encode()).hexdigest())
 
     def record_sink(self, session_id: str, sink: dict[str, Any]) -> None:
