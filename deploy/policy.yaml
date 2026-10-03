@@ -1,0 +1,36 @@
+# SecureLiteLLM default routing policy
+#
+# Risk score = max score of all matching rules.
+# Actions by threshold:
+#   score >= block       → block (reject the request)
+#   score >= strip_tools → strip-tools (remove tool definitions)
+#   score >= route_hardened → route-hardened (redirect to ROUTER_HARDENED_MODEL)
+#   score <  route_hardened → allow
+
+thresholds:
+  route_hardened: 0.4
+  strip_tools: 0.7
+  block: 0.9
+
+rules:
+  # L0 — both flags set: untrusted content arrived AND a sink was called.
+  # Moderate risk; route to a more cautious model.
+  - id: untrusted_and_sink
+    when:
+      untrusted_seen: true
+      sink_requested: true
+    score: 0.5
+
+  # L2 — classifier flagged at least one source as an injection attempt.
+  # High risk; strip tool access so the payload cannot exfiltrate.
+  - id: classifier_injection
+    when:
+      classifier_injection: true
+    score: 0.75
+
+  # L3 — tainted span hashes found inside a sink's arguments.
+  # Confirmed source→sink chain: block immediately.
+  - id: tainted_in_sink_args
+    when:
+      tainted_spans_in_sink_args: true
+    score: 1.0
