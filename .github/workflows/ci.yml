@@ -25,5 +25,55 @@ jobs:
       - name: Format check
         run: uv run ruff format --check .
 
-      - name: Test
-        run: uv run pytest tests/ -v
+      - name: Unit tests
+        run: uv run pytest tests/ -v --ignore=tests/test_e2e.py
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.12.21"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups
+
+      - name: Start stack
+        working-directory: deploy
+        env:
+          LITELLM_MASTER_KEY: sk-test-ci-e2e-key
+          GROQ_API_KEY: ""
+        run: docker compose up -d
+
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 24); do
+            hs=$(docker inspect --format='{{.State.Health.Status}}' deploy-litellm-1 2>/dev/null || echo "missing")
+            echo "[$i] litellm: $hs"
+            [ "$hs" = "healthy" ] && exit 0
+            sleep 5
+          done
+          echo "Timed out waiting for litellm to become healthy"
+          docker logs deploy-litellm-1
+          exit 1
+
+      - name: E2E tests
+        env:
+          E2E_BASE_URL: http://localhost:4000
+          E2E_MASTER_KEY: sk-test-ci-e2e-key
+        run: uv run pytest tests/test_e2e.py -v -m e2e
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "=== litellm logs ==="
+          docker logs deploy-litellm-1
+          echo "=== mock-model logs ==="
+          docker logs deploy-mock-model-1
+
+      - name: Tear down
+        if: always()
+        working-directory: deploy
+        run: docker compose down
