@@ -4,9 +4,11 @@ Registered in litellm_config.yaml under litellm_settings.callbacks.
 M1 — pass-through that logs a structured decision record per request.
 M2 — session ID hardened; session taint store wired; L0/L1 features populated;
      async_post_call_success_hook added to close the taint loop.
-M3/M4 — classifier calls and policy enforcement added in later milestones.
+M3 — classifier integrated at L2/L3; classifier_verdicts added to features.
+M4 — policy enforcement added in later milestone.
 """
 
+import asyncio
 import time
 import uuid
 from datetime import datetime, timezone
@@ -14,6 +16,7 @@ from typing import Any
 
 from litellm.integrations.custom_logger import CustomLogger
 
+from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
@@ -71,6 +74,7 @@ class RouterHook(CustomLogger):
         super().__init__()
         self.config = RouterConfig.from_env()
         self.decision_logger = DecisionLogger(self.config.log_path)
+        self._classifier: BaseClassifier | None = _init_classifier(self.config.classifier_backend)
 
     async def async_pre_call_hook(
         self,
@@ -92,6 +96,12 @@ class RouterHook(CustomLogger):
             store = get_store()
             for src in classify_sources(messages):
                 store.record_source(session_id, src)
+
+        # L2/L3: run classifier over each untrusted source
+        if self.config.level in ("L2", "L3") and self._classifier is not None:
+            sources = classify_sources(messages)
+            verdicts = await _classify_sources(self._classifier, sources)
+            features["classifier_verdicts"] = verdicts
 
         tool_context = extract_tool_context(messages)
         latency_ms = round((time.perf_counter() - t0) * 1000, 3)
@@ -139,6 +149,32 @@ class RouterHook(CustomLogger):
         store = get_store()
         for sink in egress_sinks:
             store.record_sink(session_id, sink)
+
+
+def _init_classifier(backend: str) -> BaseClassifier | None:
+    """Instantiate the classifier for this process, fail-open on any error."""
+    if backend == "none":
+        return None
+    try:
+        from router.classifiers import get_classifier
+        return get_classifier()
+    except Exception:
+        return None
+
+
+async def _classify_sources(
+    classifier: BaseClassifier,
+    sources: list[dict],
+) -> list[dict]:
+    """Run safe_classify on each source's content concurrently."""
+    async def _one(src: dict) -> dict:
+        content = src.get("content_preview", "") or ""
+        result = await classifier.safe_classify(content)
+        verdict = classifier.to_verdict(result)
+        verdict["source_id"] = src.get("tool_call_id")
+        return verdict
+
+    return await asyncio.gather(*[_one(s) for s in sources])
 
 
 def _extract_response_sinks(response: Any) -> list[dict[str, Any]]:
