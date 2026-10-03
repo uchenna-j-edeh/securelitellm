@@ -15,6 +15,8 @@ services:
       - ROUTER_MODE=${ROUTER_MODE:-stateless}
       - ROUTER_LEVEL=${ROUTER_LEVEL:-L0}
       - ROUTER_LOG_PATH=${ROUTER_LOG_PATH:--}   # default: stdout
+      - CLASSIFIER_BACKEND=${CLASSIFIER_BACKEND:-none}
+      - PROMPTGUARD_THRESHOLD=${PROMPTGUARD_THRESHOLD:-0.5}
     depends_on:
       mock-model:
         condition: service_healthy
