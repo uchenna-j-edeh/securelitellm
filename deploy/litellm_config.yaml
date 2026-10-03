@@ -5,6 +5,18 @@ model_list:
       api_base: http://mock-model:8001/v1
       api_key: "sk-fake"
 
+  # Groq free tier (confirmed working model for this key):
+  - model_name: groq
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
+  # Alias "llm" → groq so existing tests keep working
+  - model_name: llm
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
 litellm_settings:
   drop_params: true
   callbacks: ["router.hook.proxy_handler_instance"]
