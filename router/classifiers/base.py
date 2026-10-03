@@ -1,8 +1,7 @@
 """Common classifier interface for all prompt-injection scanners."""
 
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -22,7 +21,6 @@ class BaseClassifier(ABC):
 
     async def safe_classify(self, text: str) -> ClassifierResult | None:
         """Classify and return None on any error (fail-open)."""
-        t0 = time.perf_counter()
         try:
             return await self.classify(text)
         except Exception:

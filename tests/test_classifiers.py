@@ -1,14 +1,12 @@
 """Tests for M3 classifier stack: base, cached, promptguard, factory."""
 
 import asyncio
-from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from router.classifiers.base import BaseClassifier, ClassifierResult
 from router.classifiers.cached import CachedClassifier
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
