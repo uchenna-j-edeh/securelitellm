@@ -36,6 +36,5 @@ def get_classifier() -> BaseClassifier | None:
         return CachedClassifier(LLMGuardClassifier(), max_size=max_size)
 
     raise ValueError(
-        f"Unknown CLASSIFIER_BACKEND={backend!r}. "
-        "Valid values: promptguard, llmguard, none"
+        f"Unknown CLASSIFIER_BACKEND={backend!r}. Valid values: promptguard, llmguard, none"
     )

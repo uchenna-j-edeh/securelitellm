@@ -12,6 +12,7 @@ from router.classifiers.cached import CachedClassifier
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 
+
 class _FakeClassifier(BaseClassifier):
     """Deterministic stub; counts calls."""
 
@@ -33,6 +34,7 @@ class _FakeClassifier(BaseClassifier):
 # ---------------------------------------------------------------------------
 # BaseClassifier
 # ---------------------------------------------------------------------------
+
 
 class TestBaseClassifier:
     def test_to_verdict_result(self):
@@ -71,6 +73,7 @@ class TestBaseClassifier:
 # ---------------------------------------------------------------------------
 # CachedClassifier
 # ---------------------------------------------------------------------------
+
 
 class TestCachedClassifier:
     def test_first_call_hits_inner(self):
@@ -158,13 +161,12 @@ class TestCachedClassifier:
 # PromptGuardClassifier
 # ---------------------------------------------------------------------------
 
+
 class TestPromptGuardClassifier:
     def _mock_response(self, score_str: str) -> MagicMock:
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
-        resp.json.return_value = {
-            "choices": [{"message": {"content": score_str}}]
-        }
+        resp.json.return_value = {"choices": [{"message": {"content": score_str}}]}
         return resp
 
     def test_benign_score_returns_benign(self):
@@ -212,6 +214,7 @@ class TestPromptGuardClassifier:
 
         with patch.dict("os.environ", {}, clear=False):
             import os
+
             os.environ.pop("GROQ_API_KEY", None)
             with pytest.raises(ValueError, match="GROQ_API_KEY"):
                 PromptGuardClassifier(api_key="")
@@ -240,24 +243,31 @@ class TestPromptGuardClassifier:
 # Factory (get_classifier)
 # ---------------------------------------------------------------------------
 
+
 class TestGetClassifier:
     def test_none_backend_returns_none(self):
         with patch.dict("os.environ", {"CLASSIFIER_BACKEND": "none"}):
             from router.classifiers import get_classifier
+
             assert get_classifier() is None
 
     def test_invalid_backend_raises(self):
         with pytest.raises(ValueError, match="Unknown CLASSIFIER_BACKEND"):
             with patch.dict("os.environ", {"CLASSIFIER_BACKEND": "bogus"}):
                 from router.classifiers import get_classifier
+
                 get_classifier()
 
     def test_promptguard_backend_wraps_in_cache(self):
-        with patch.dict("os.environ", {
-            "CLASSIFIER_BACKEND": "promptguard",
-            "GROQ_API_KEY": "sk-fake",
-        }):
+        with patch.dict(
+            "os.environ",
+            {
+                "CLASSIFIER_BACKEND": "promptguard",
+                "GROQ_API_KEY": "sk-fake",
+            },
+        ):
             from router.classifiers import get_classifier
             from router.classifiers.cached import CachedClassifier
+
             clf = get_classifier()
             assert isinstance(clf, CachedClassifier)

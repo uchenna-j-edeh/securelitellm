@@ -76,4 +76,7 @@ jobs:
       - name: Tear down
         if: always()
         working-directory: deploy
+        env:
+          LITELLM_MASTER_KEY: sk-test-ci-e2e-key
+          GROQ_API_KEY: ""
         run: docker compose down

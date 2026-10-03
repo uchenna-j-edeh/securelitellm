@@ -157,6 +157,7 @@ def _init_classifier(backend: str) -> BaseClassifier | None:
         return None
     try:
         from router.classifiers import get_classifier
+
         return get_classifier()
     except Exception:
         return None
@@ -167,6 +168,7 @@ async def _classify_sources(
     sources: list[dict],
 ) -> list[dict]:
     """Run safe_classify on each source's content concurrently."""
+
     async def _one(src: dict) -> dict:
         content = src.get("content_preview", "") or ""
         result = await classifier.safe_classify(content)

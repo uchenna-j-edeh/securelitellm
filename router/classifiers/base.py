@@ -6,10 +6,10 @@ from dataclasses import dataclass
 
 @dataclass
 class ClassifierResult:
-    label: str        # "INJECTION" or "BENIGN"
-    score: float      # 0-1; probability of injection
+    label: str  # "INJECTION" or "BENIGN"
+    score: float  # 0-1; probability of injection
     latency_ms: float
-    model: str        # identifier of the classifier that produced this
+    model: str  # identifier of the classifier that produced this
     cached: bool = False
 
 

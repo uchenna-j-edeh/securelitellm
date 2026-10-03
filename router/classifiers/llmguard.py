@@ -23,8 +23,7 @@ class LLMGuardClassifier(BaseClassifier):
             )
         except ImportError as exc:
             raise ImportError(
-                "llm-guard is required for LLMGuardClassifier. "
-                "Install with: pip install llm-guard"
+                "llm-guard is required for LLMGuardClassifier. Install with: pip install llm-guard"
             ) from exc
 
         self._scanner = PromptInjection(match_type=MatchType.FULL)

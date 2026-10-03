@@ -29,8 +29,10 @@ class PromptGuardClassifier(BaseClassifier):
     ) -> None:
         self.api_key = api_key or os.environ.get("GROQ_API_KEY", "")
         self.model = model
-        self.threshold = threshold if threshold is not None else float(
-            os.environ.get("PROMPTGUARD_THRESHOLD", DEFAULT_THRESHOLD)
+        self.threshold = (
+            threshold
+            if threshold is not None
+            else float(os.environ.get("PROMPTGUARD_THRESHOLD", DEFAULT_THRESHOLD))
         )
         self.timeout = timeout
 
