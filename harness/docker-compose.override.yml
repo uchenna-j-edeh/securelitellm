@@ -1,0 +1,12 @@
+# Harness override — adds a writable log volume so decisions.jsonl is
+# accessible on the host at harness/logs/decisions.jsonl.
+#
+# Usage (from repo root):
+#   docker compose -f deploy/docker-compose.yml -f harness/docker-compose.override.yml up -d
+
+services:
+  litellm:
+    volumes:
+      - ../harness/logs:/logs
+    environment:
+      - ROUTER_LOG_PATH=/logs/decisions.jsonl
