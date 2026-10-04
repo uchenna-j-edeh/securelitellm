@@ -22,6 +22,7 @@ class SessionState:
     sinks: list[dict[str, Any]] = field(default_factory=list)
     tainted: bool = False
     tainted_spans: list[str] = field(default_factory=list)  # SHA-256 of raw content
+    escalation_count: int = 0  # times policy fired non-allow in this session
 
 
 class SessionStore:
@@ -45,7 +46,8 @@ class SessionStore:
             s = self._store.setdefault(session_id, SessionState(session_id=session_id))
             s.sources.append(source)
             s.tainted = True
-            raw = str(source.get("content", ""))
+            # classify_sources stores content under "content_preview"; fall back to "content"
+            raw = str(source.get("content_preview") or source.get("content", ""))
             s.tainted_spans.append(hashlib.sha256(raw.encode()).hexdigest())
 
     def record_sink(self, session_id: str, sink: dict[str, Any]) -> None:
@@ -54,6 +56,15 @@ class SessionStore:
             s = self._store.get(session_id)
             if s is not None:
                 s.sinks.append(sink)
+
+    def record_escalation(self, session_id: str) -> int:
+        """Increment escalation counter and return new count."""
+        with self._lock:
+            s = self._store.get(session_id)
+            if s is not None:
+                s.escalation_count += 1
+                return s.escalation_count
+        return 0
 
     def expire(self, session_id: str) -> None:
         with self._lock:

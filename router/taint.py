@@ -118,7 +118,14 @@ def tainted_spans_in_sink_args(
     sinks: list[dict[str, Any]],
     messages: list[dict[str, Any]],
 ) -> bool:
-    """L3: check if any tainted content hash appears in a sink's arguments."""
+    """L3: check if any tainted content hash appears in a sink's arguments.
+
+    Checks both the whole args string and individual string values inside the
+    parsed JSON object — so {"body": "PAYLOAD"} matches SHA-256("PAYLOAD").
+    """
+    import hashlib
+    import json
+
     # Build a map of sink id -> raw args from the message list
     sink_args: dict[str, str] = {}
     for msg in messages:
@@ -128,13 +135,21 @@ def tainted_spans_in_sink_args(
             sid = call.get("id", "")
             sink_args[sid] = call.get("function", {}).get("arguments", "")
 
-    import hashlib
+    span_set = set(tainted_spans)
 
-    for span_hash in tainted_spans:
-        for args in sink_args.values():
-            candidate = hashlib.sha256(args.encode()).hexdigest()
-            if span_hash == candidate:
-                return True
+    for args in sink_args.values():
+        # Check whole args string
+        if hashlib.sha256(args.encode()).hexdigest() in span_set:
+            return True
+        # Check each string value inside a JSON object
+        try:
+            parsed = json.loads(args)
+            values = parsed.values() if isinstance(parsed, dict) else [parsed]
+            for v in values:
+                if hashlib.sha256(str(v).encode()).hexdigest() in span_set:
+                    return True
+        except (json.JSONDecodeError, AttributeError):
+            pass
     return False
 
 

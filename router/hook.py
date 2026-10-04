@@ -5,7 +5,7 @@ M1 — pass-through that logs a structured decision record per request.
 M2 — session ID hardened; session taint store wired; L0/L1 features populated;
      async_post_call_success_hook added to close the taint loop.
 M3 — classifier integrated at L2/L3; classifier_verdicts added to features.
-M4 — policy enforcement added in later milestone.
+M4 — policy engine wired; routing actions allow/route-hardened/strip-tools/block.
 """
 
 import asyncio
@@ -20,6 +20,7 @@ from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
+from router.policy import PolicyEngine, PolicyViolation
 from router.session import get_store
 from router.taint import classify_sinks, classify_sources, tainted_spans_in_sink_args
 
@@ -75,6 +76,7 @@ class RouterHook(CustomLogger):
         self.config = RouterConfig.from_env()
         self.decision_logger = DecisionLogger(self.config.log_path)
         self._classifier: BaseClassifier | None = _init_classifier(self.config.classifier_backend)
+        self._policy = PolicyEngine.from_yaml(self.config.policy_path or None)
 
     async def async_pre_call_hook(
         self,
@@ -102,6 +104,17 @@ class RouterHook(CustomLogger):
             sources = classify_sources(messages)
             verdicts = await _classify_sources(self._classifier, sources)
             features["classifier_verdicts"] = verdicts
+            # Derived flag consumed by policy rules
+            features["classifier_injection"] = any(v.get("label") == "INJECTION" for v in verdicts)
+
+        # M4: evaluate policy rules → risk score → action
+        risk_score, action, matched_rules = self._policy.evaluate(features)
+
+        # Escalation counter (session mode only, non-allow actions)
+        escalation_count = 0
+        if self.config.mode == "session" and action != "allow":
+            escalation_count = get_store().record_escalation(session_id)
+            features["escalation_count"] = escalation_count
 
         tool_context = extract_tool_context(messages)
         latency_ms = round((time.perf_counter() - t0) * 1000, 3)
@@ -114,14 +127,33 @@ class RouterHook(CustomLogger):
                 "mode": self.config.mode,
                 "level": self.config.level,
                 "features": features,
-                "risk_score": 0.0,
-                "action": "allow",
+                "risk_score": round(risk_score, 4),
+                "action": action,
+                "matched_rules": matched_rules,
+                "enforce": self.config.enforce,
                 "latency_ms": latency_ms,
                 "tool_context": tool_context,
             }
         )
 
-        return data  # pass-through until M4 policy enforcement
+        # Audit mode: log action but always pass through
+        if not self.config.enforce:
+            return data
+
+        # Enforcement
+        if action == "block":
+            raise PolicyViolation(risk_score, matched_rules)
+
+        if action == "strip-tools":
+            data = dict(data)
+            data.pop("tools", None)
+            data.pop("tool_choice", None)
+
+        if action == "route-hardened":
+            data = dict(data)
+            data["model"] = self.config.hardened_model
+
+        return data
 
     async def async_post_call_success_hook(
         self,

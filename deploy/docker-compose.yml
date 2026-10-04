@@ -17,6 +17,9 @@ services:
       - ROUTER_LOG_PATH=${ROUTER_LOG_PATH:--}   # default: stdout
       - CLASSIFIER_BACKEND=${CLASSIFIER_BACKEND:-none}
       - PROMPTGUARD_THRESHOLD=${PROMPTGUARD_THRESHOLD:-0.5}
+      - ROUTER_ENFORCE=${ROUTER_ENFORCE:-false}
+      - ROUTER_HARDENED_MODEL=${ROUTER_HARDENED_MODEL:-mock}
+      - POLICY_PATH=${POLICY_PATH:-/workspace/deploy/policy.yaml}
     depends_on:
       mock-model:
         condition: service_healthy

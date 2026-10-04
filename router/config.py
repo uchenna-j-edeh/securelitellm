@@ -19,6 +19,9 @@ class RouterConfig:
     level: Level = "L0"
     log_path: str = "-"  # "-" = stdout
     classifier_backend: ClassifierBackend = "none"
+    enforce: bool = False  # False = audit only (log action, never block/strip)
+    policy_path: str = ""  # empty = use bundled deploy/policy.yaml
+    hardened_model: str = "mock"  # model alias to route-hardened requests to
 
     @classmethod
     def from_env(cls) -> "RouterConfig":
@@ -26,6 +29,9 @@ class RouterConfig:
         level = os.getenv("ROUTER_LEVEL", "L0")
         log_path = os.getenv("ROUTER_LOG_PATH", "-")
         classifier_backend = os.getenv("CLASSIFIER_BACKEND", "none").lower()
+        enforce = os.getenv("ROUTER_ENFORCE", "false").lower() in ("1", "true", "yes")
+        policy_path = os.getenv("POLICY_PATH", "")
+        hardened_model = os.getenv("ROUTER_HARDENED_MODEL", "mock")
 
         if mode not in _VALID_MODES:
             raise ValueError(f"ROUTER_MODE must be one of {_VALID_MODES}, got {mode!r}")
@@ -41,4 +47,7 @@ class RouterConfig:
             level=level,
             log_path=log_path,
             classifier_backend=classifier_backend,
+            enforce=enforce,
+            policy_path=policy_path,
+            hardened_model=hardened_model,
         )
