@@ -25,6 +25,9 @@ jobs:
       - name: Format check
         run: uv run ruff format --check .
 
+      - name: Validate corpus scenarios
+        run: uv run python corpus/validate.py
+
       - name: Unit tests
         run: uv run pytest tests/ -v --ignore=tests/test_e2e.py
 
