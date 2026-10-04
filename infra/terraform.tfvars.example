@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars (never commit terraform.tfvars — it may contain
+# sensitive overrides). Adjust values for your deployment target.
+
+aws_region   = "us-east-1"
+project_name = "securelitellm"
+environment  = "dev"
+
+github_repo = "uchenna-j-edeh/securelitellm"
+
+task_cpu    = 512
+task_memory = 1024
+
+# Experiment settings — flip router_enforce to "true" to enable blocking
+router_mode    = "session"
+router_level   = "L3"
+router_enforce = "false"
+
+classifier_backend    = "promptguard"
+promptguard_threshold = "0.5"
