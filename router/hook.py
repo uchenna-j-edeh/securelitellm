@@ -149,6 +149,7 @@ class RouterHook(CustomLogger):
         # Enforcement
         if action == "block":
             import litellm.exceptions as _le
+
             raise _le.BadRequestError(
                 message=str(PolicyViolation(risk_score, matched_rules)),
                 model=data.get("model", ""),
@@ -249,6 +250,7 @@ class RouterHook(CustomLogger):
             return None
         if policy_action == "block":
             import litellm.exceptions as _le
+
             raise _le.BadRequestError(
                 message=str(PolicyViolation(risk_score, matched_rules)),
                 model=data.get("model", ""),
