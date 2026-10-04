@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 # ---------------------------------------------------------------------------
 # Schema models — imported by harness/runner.py at replay time
@@ -30,18 +30,32 @@ AttackClass = Literal["direct_exfil", "delayed_exfil", "mcp_pivot", "rag_poison"
 VariantTag = Literal["paraphrase", "encoding", "split"]
 
 
-class ToolFunction(BaseModel):
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ToolFunction(StrictModel):
     name: str
     arguments: str  # JSON-encoded string; parsed at harness replay time
 
+    @model_validator(mode="after")
+    def validate_arguments(self) -> "ToolFunction":
+        try:
+            decoded = json.loads(self.arguments)
+        except json.JSONDecodeError as exc:
+            raise ValueError("tool arguments must be valid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise ValueError("tool arguments must decode to a JSON object")
+        return self
 
-class ToolCall(BaseModel):
+
+class ToolCall(StrictModel):
     id: str
     type: Literal["function"] = "function"
     function: ToolFunction
 
 
-class Message(BaseModel):
+class Message(StrictModel):
     role: Literal["system", "user", "assistant", "tool"]
     content: Optional[str] = None
     tool_call_id: Optional[str] = None
@@ -49,35 +63,43 @@ class Message(BaseModel):
 
     @model_validator(mode="after")
     def check_role_constraints(self) -> "Message":
-        if self.role == "tool" and not self.tool_call_id:
-            raise ValueError("role=tool messages must include tool_call_id")
-        if self.role == "assistant" and self.tool_calls is None and self.content is None:
+        if self.role == "tool":
+            if not self.tool_call_id:
+                raise ValueError("role=tool messages must include tool_call_id")
+            if self.tool_calls:
+                raise ValueError("role=tool messages cannot include tool_calls")
+        elif self.tool_call_id is not None:
+            raise ValueError("only role=tool messages may include tool_call_id")
+
+        if self.role == "assistant" and not self.tool_calls and self.content is None:
             raise ValueError("role=assistant must have content or tool_calls")
+        if self.role != "assistant" and self.tool_calls:
+            raise ValueError("only role=assistant messages may include tool_calls")
         return self
 
 
-class Turn(BaseModel):
+class Turn(StrictModel):
     name: str
     is_attack_turn: bool = False
     messages: list[Message] = Field(min_length=1)
 
 
-class Taxonomy(BaseModel):
+class Taxonomy(StrictModel):
     owasp_agentic: list[str] = Field(default_factory=list)
     nsa_mcp: list[str] = Field(default_factory=list)
 
 
-class ExpectedDetects(BaseModel):
+class ExpectedDetects(StrictModel):
     # Configurations expected to produce a non-allow action on the attack turn.
     # Stateless misses multi-turn attacks by design; that absence is the finding.
     stateless: list[Level] = Field(default_factory=list)
     session: list[Level] = Field(default_factory=list)
 
 
-class Scenario(BaseModel):
+class Scenario(StrictModel):
     """A single corpus scenario — one deterministic conversation replay."""
 
-    model_config = {"populate_by_name": True}
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     id: str = Field(pattern=r"^(sc|bn)-\d{3}$")
     name: str
@@ -87,7 +109,7 @@ class Scenario(BaseModel):
     description: str
     taxonomy: Taxonomy = Field(default_factory=Taxonomy)
     expected_detects: ExpectedDetects = Field(default_factory=ExpectedDetects)
-    variant_of: Optional[str] = None
+    variant_of: Optional[str] = Field(default=None, pattern=r"^(sc|bn)-\d{3}$")
     variant_tag: Optional[VariantTag] = None
     turns: list[Turn] = Field(min_length=1)
 
@@ -99,6 +121,11 @@ class Scenario(BaseModel):
             )
         if (self.variant_of is None) != (self.variant_tag is None):
             raise ValueError("variant_of and variant_tag must both be set or both be absent")
+        expected_prefix = "sc-" if self.label == "attack" else "bn-"
+        if not self.id.startswith(expected_prefix):
+            raise ValueError(f"{self.label} scenario ids must start with {expected_prefix}")
+        if self.variant_of == self.id:
+            raise ValueError("variant_of cannot reference the scenario itself")
         return self
 
 

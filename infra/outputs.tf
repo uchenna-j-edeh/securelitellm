@@ -1,11 +1,21 @@
 output "proxy_url" {
   description = "Public URL of the LiteLLM proxy — use as OPENAI_API_BASE in clients"
-  value       = "http://${aws_lb.main.dns_name}"
+  value       = "https://${var.proxy_domain_name}"
+}
+
+output "alb_dns_name" {
+  description = "ALB target for the proxy_domain_name DNS record"
+  value       = aws_lb.main.dns_name
 }
 
 output "ecr_repository_url" {
-  description = "ECR repository URL — set as ECR_REPOSITORY_URL in GitHub Actions secrets"
+  description = "Full ECR repository URL"
   value       = aws_ecr_repository.app.repository_url
+}
+
+output "ecr_repository_name" {
+  description = "ECR repository name — set as ECR_REPOSITORY_NAME in GitHub Actions secrets"
+  value       = aws_ecr_repository.app.name
 }
 
 output "ecs_cluster_name" {

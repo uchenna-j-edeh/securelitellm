@@ -271,3 +271,11 @@ class TestGetClassifier:
 
             clf = get_classifier()
             assert isinstance(clf, CachedClassifier)
+
+
+def test_router_classifier_initialization_fails_closed():
+    from router.hook import _init_classifier
+
+    with patch("router.classifiers.get_classifier", side_effect=ValueError("missing key")):
+        with pytest.raises(RuntimeError, match="Failed to initialize"):
+            _init_classifier("promptguard")

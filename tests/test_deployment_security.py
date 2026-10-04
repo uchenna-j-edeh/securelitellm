@@ -46,3 +46,42 @@ def test_master_key_comes_from_environment():
 def test_uv_lock_is_committed_as_project_input():
     assert (ROOT / "uv.lock").is_file()
     assert "uv.lock" not in (ROOT / ".gitignore").read_text().splitlines()
+
+
+def test_production_router_dependencies_are_exactly_pinned():
+    dockerfile = (ROOT / "deploy/Dockerfile").read_text()
+    assert "pyyaml==6.0.3" in dockerfile
+    assert "aiohttp==3.14.3" in dockerfile
+    assert "pyyaml>=" not in dockerfile
+    assert "aiohttp>=" not in dockerfile
+
+
+def test_compose_enforces_session_l3_by_default():
+    compose = load_yaml("deploy/docker-compose.yml")
+    environment = compose["services"]["litellm"]["environment"]
+    assert "ROUTER_MODE=${ROUTER_MODE:-session}" in environment
+    assert "ROUTER_LEVEL=${ROUTER_LEVEL:-L3}" in environment
+    assert "ROUTER_ENFORCE=${ROUTER_ENFORCE:-true}" in environment
+
+
+def test_aws_load_balancer_redirects_http_to_https():
+    alb = (ROOT / "infra/alb.tf").read_text()
+    outputs = (ROOT / "infra/outputs.tf").read_text()
+    assert 'protocol          = "HTTPS"' in alb
+    assert "certificate_arn   = var.acm_certificate_arn" in alb
+    assert 'type = "redirect"' in alb
+    assert 'protocol    = "HTTPS"' in alb
+    assert 'value       = "https://${var.proxy_domain_name}"' in outputs
+
+
+def test_aws_deploy_requires_explicit_enablement_and_configuration():
+    workflow = (ROOT / ".github/workflows/deploy.yml").read_text()
+    assert "vars.AWS_DEPLOY_ENABLED == 'true'" in workflow
+    for required in (
+        "AWS_ROLE_ARN",
+        "AWS_REGION",
+        "ECR_REPOSITORY_NAME",
+        "ECS_CLUSTER",
+        "ECS_SERVICE",
+    ):
+        assert required in workflow

@@ -150,7 +150,7 @@ resource "aws_ecs_service" "litellm" {
   }
 
   depends_on = [
-    aws_lb_listener.http,
+    aws_lb_listener.https,
     aws_iam_role_policy_attachment.ecs_execution_managed,
   ]
 

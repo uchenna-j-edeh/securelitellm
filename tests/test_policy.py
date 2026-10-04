@@ -1,5 +1,7 @@
 """Tests for M4 policy engine."""
 
+import pytest
+
 from router.policy import PolicyConfig, PolicyEngine, PolicyRule, PolicyViolation
 
 
@@ -156,11 +158,31 @@ rules:
     assert matched == ["test_rule"]
 
 
-def test_from_yaml_missing_file_returns_allow_engine(tmp_path):
-    engine = PolicyEngine.from_yaml(tmp_path / "nonexistent.yaml")
-    score, action, _ = engine.evaluate({"untrusted_seen": True, "sink_requested": True})
-    assert score == 0.0
-    assert action == "allow"
+def test_from_yaml_missing_file_fails_closed(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        PolicyEngine.from_yaml(tmp_path / "nonexistent.yaml")
+
+
+@pytest.mark.parametrize(
+    "body, error",
+    [
+        ("rules: []", "at least one rule"),
+        (
+            "rules:\n  - id: bad\n    when: {made_up_feature: true}\n    score: 0.5",
+            "unknown features",
+        ),
+        (
+            "thresholds: {route_hardened: 0.8, strip_tools: 0.4, block: 0.9}\n"
+            "rules:\n  - id: ok\n    when: {untrusted_seen: true}\n    score: 0.5",
+            "must satisfy",
+        ),
+    ],
+)
+def test_from_yaml_rejects_unsafe_configuration(tmp_path, body, error):
+    policy_file = tmp_path / "bad-policy.yaml"
+    policy_file.write_text(body)
+    with pytest.raises(ValueError, match=error):
+        PolicyEngine.from_yaml(policy_file)
 
 
 # ---------------------------------------------------------------------------

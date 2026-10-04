@@ -33,6 +33,14 @@ _DEFAULT_THRESHOLDS: dict[str, float] = {
     "strip_tools": 0.7,
     "block": 0.9,
 }
+_ALLOWED_FEATURES = {
+    "classifier_error",
+    "classifier_injection",
+    "sink_requested",
+    "streaming_tool_request",
+    "tainted_spans_in_sink_args",
+    "untrusted_seen",
+}
 
 
 class PolicyViolation(Exception):
@@ -67,16 +75,51 @@ class PolicyEngine:
 
         resolved = Path(path) if path else Path(os.environ.get("POLICY_PATH", _BUNDLED_POLICY))
         if not resolved.exists():
-            return cls(PolicyConfig())  # no rules file → always allow
+            raise FileNotFoundError(f"Policy file does not exist: {resolved}")
 
         with resolved.open() as fh:
             raw = yaml.safe_load(fh) or {}
 
-        rules = [
-            PolicyRule(id=r["id"], when=r.get("when", {}), score=float(r["score"]))
-            for r in raw.get("rules", [])
-        ]
-        thresholds = {**_DEFAULT_THRESHOLDS, **raw.get("thresholds", {})}
+        if not isinstance(raw, dict):
+            raise ValueError("Policy root must be a mapping")
+
+        raw_rules = raw.get("rules")
+        if not isinstance(raw_rules, list) or not raw_rules:
+            raise ValueError("Policy must define at least one rule")
+
+        rules = []
+        seen_ids: set[str] = set()
+        for raw_rule in raw_rules:
+            if not isinstance(raw_rule, dict):
+                raise ValueError("Each policy rule must be a mapping")
+            rule_id = str(raw_rule.get("id", "")).strip()
+            conditions = raw_rule.get("when")
+            score = float(raw_rule.get("score", -1))
+            if not rule_id or rule_id in seen_ids:
+                raise ValueError(f"Policy rule ids must be unique and non-empty: {rule_id!r}")
+            if not isinstance(conditions, dict) or not conditions:
+                raise ValueError(f"Policy rule {rule_id!r} must define a non-empty 'when' mapping")
+            unknown = set(conditions) - _ALLOWED_FEATURES
+            if unknown:
+                raise ValueError(
+                    f"Policy rule {rule_id!r} uses unknown features: {sorted(unknown)}"
+                )
+            if not 0.0 <= score <= 1.0:
+                raise ValueError(f"Policy rule {rule_id!r} score must be between 0 and 1")
+            seen_ids.add(rule_id)
+            rules.append(PolicyRule(id=rule_id, when=conditions, score=score))
+
+        raw_thresholds = raw.get("thresholds", {})
+        if not isinstance(raw_thresholds, dict):
+            raise ValueError("Policy thresholds must be a mapping")
+        thresholds = {**_DEFAULT_THRESHOLDS, **raw_thresholds}
+        values = [thresholds[name] for name in ("route_hardened", "strip_tools", "block")]
+        if not all(isinstance(value, (int, float)) and 0 <= value <= 1 for value in values):
+            raise ValueError("Policy thresholds must be numbers between 0 and 1")
+        if values != sorted(values):
+            raise ValueError(
+                "Policy thresholds must satisfy route_hardened <= strip_tools <= block"
+            )
         return cls(PolicyConfig(rules=rules, thresholds=thresholds))
 
     def evaluate(self, features: dict[str, Any]) -> tuple[float, Action, list[str]]:

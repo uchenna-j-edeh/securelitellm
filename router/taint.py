@@ -19,7 +19,8 @@ Sink categories:
   "other"  — unknown capability
 """
 
-from typing import Any
+import hashlib
+from typing import Any, Iterator
 
 # Known sink function-name prefixes/substrings → category.
 # Extend as the corpus grows.
@@ -69,9 +70,8 @@ def _sink_category(fn_name: str) -> str:
     for pat in _WRITE_PATTERNS:
         if pat in name:
             return "write"
-    for pat in _READ_PATTERNS:
-        if any(name.startswith(p) or p in name for p in _READ_PATTERNS):
-            return "read"
+    if any(name.startswith(pattern) or pattern in name for pattern in _READ_PATTERNS):
+        return "read"
     return "other"
 
 
@@ -81,20 +81,25 @@ def classify_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for msg in messages:
         if msg.get("role") != "tool":
             continue
-        content = msg.get("content", "")
+        content = str(msg.get("content", ""))
         sources.append(
             {
                 "tool_call_id": msg.get("tool_call_id"),
                 "trust_tier": _infer_trust_tier(msg),
-                "content_length": len(str(content)),
-                "content_preview": str(content)[:120],
+                "content_length": len(content),
+                "content_preview": content[:120],
+                "content_hash": hashlib.sha256(content.encode()).hexdigest(),
             }
         )
     return sources
 
 
 def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract assistant tool_calls that have egress capability."""
+    """Extract assistant tool calls that can write, transmit, or have unknown capability.
+
+    Known read-only tools are deliberately excluded. Unknown tools remain sinks so
+    a new or misspelled function name fails closed instead of bypassing policy.
+    """
     sinks = []
     for msg in messages:
         if msg.get("role") != "assistant":
@@ -102,11 +107,14 @@ def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for call in msg.get("tool_calls") or []:
             fn = call.get("function", {})
             name = fn.get("name", "")
+            category = _sink_category(name)
+            if category == "read":
+                continue
             sinks.append(
                 {
                     "id": call.get("id"),
                     "name": name,
-                    "category": _sink_category(name),
+                    "category": category,
                     "args_length": len(fn.get("arguments", "")),
                 }
             )
@@ -123,7 +131,6 @@ def tainted_spans_in_sink_args(
     Checks both the whole args string and individual string values inside the
     parsed JSON object — so {"body": "PAYLOAD"} matches SHA-256("PAYLOAD").
     """
-    import hashlib
     import json
 
     # Build a map of sink id -> raw args from the message list
@@ -144,13 +151,24 @@ def tainted_spans_in_sink_args(
         # Check each string value inside a JSON object
         try:
             parsed = json.loads(args)
-            values = parsed.values() if isinstance(parsed, dict) else [parsed]
-            for v in values:
-                if hashlib.sha256(str(v).encode()).hexdigest() in span_set:
+            for value in _iter_string_values(parsed):
+                if hashlib.sha256(value.encode()).hexdigest() in span_set:
                     return True
         except (json.JSONDecodeError, AttributeError):
             pass
     return False
+
+
+def _iter_string_values(value: Any) -> Iterator[str]:
+    """Yield strings recursively from decoded JSON tool arguments."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from _iter_string_values(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _iter_string_values(nested)
 
 
 def _infer_trust_tier(msg: dict[str, Any]) -> str:

@@ -112,7 +112,8 @@ The `.env` file is ignored by Git. Never commit the real key.
 make lint test
 ```
 
-Expected: `All checks passed!` from ruff, `26 passed` from pytest (as of M1).
+Expected: `All checks passed!` from ruff and all unit tests passing. End-to-end
+tests run separately with `make test-e2e` after the stack is healthy.
 
 ### Step 3 — Start the stack
 
@@ -180,9 +181,10 @@ Expected: a JSONL decision record with all required fields:
   "ts": "...",
   "session_id": "no-session-...",
   "request_id": "...",
-  "mode": "stateless",
-  "level": "L0",
-  "features": {},
+  "phase": "pre_call",
+  "mode": "session",
+  "level": "L3",
+  "features": {"untrusted_seen": false, "sink_requested": false},
   "risk_score": 0.0,
   "action": "allow",
   "latency_ms": 0.006,
@@ -271,9 +273,30 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | Variable | Default | Options |
 |---|---|---|
 | `LITELLM_MASTER_KEY` | none (required) | unique local secret stored in `.env` |
-| `ROUTER_MODE` | `stateless` | `stateless`, `session` |
-| `ROUTER_LEVEL` | `L0` | `L0`, `L1`, `L2`, `L3` |
+| `ROUTER_MODE` | `session` | `stateless`, `session` |
+| `ROUTER_LEVEL` | `L3` | `L0`, `L1`, `L2`, `L3` |
+| `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path |
+| `CLASSIFIER_BACKEND` | `none` | `none`, `promptguard`, `llmguard` |
+
+### Tool-call decisions
+
+SecureLiteLLM checks a request before it reaches the model and checks newly
+generated non-streaming tool calls again before returning them to the agent:
+
+- **execute** — the generated tool call is safe enough to return to the agent.
+- **hold** — the tool call is removed from the response and replaced with a
+  review notice; the agent cannot execute it automatically.
+- **block** — a confirmed high-risk flow raises a policy error and the tool call
+  is not returned.
+
+Streaming requests that include tools are blocked before the model call because
+the current LiteLLM callback cannot reliably inspect streamed tool calls before
+they reach the client. Read-only tools are not treated as egress sinks; unknown
+tools are treated as potentially dangerous.
+
+For AWS deployment, including HTTPS, OIDC, required secrets, and the explicit
+deployment enable switch, see [`infra/README.md`](infra/README.md).
 
 ---
 
@@ -297,7 +320,7 @@ See `docs/adr/` for ADR-001 through ADR-007. Key decisions:
 - Session = one agent run (ADR-001)
 - Taint tracker, not full history pooling (ADR-002)
 - Off-the-shelf classifiers only — PromptGuard 2 + LLM Guard (ADR-003)
-- Integration via LiteLLM `async_pre_call_hook` (ADR-004)
+- Integration via LiteLLM pre- and post-call hooks (ADR-004)
 - Threat model: indirect/content-borne injection only; direct user injection out of scope (ADR-005)
 - eBPF backstop parked until M4 review (ADR-006)
 - Four context-richness levels L0–L3 (ADR-007)
