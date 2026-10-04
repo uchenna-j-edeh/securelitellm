@@ -1,0 +1,20 @@
+# Production LiteLLM config — no mock-model entry (mock is local dev only).
+# Secrets injected by ECS as env vars; never hardcode values here.
+
+model_list:
+  - model_name: groq
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
+  - model_name: llm
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
+litellm_settings:
+  drop_params: true
+  callbacks: ["router.hook.proxy_handler_instance"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
