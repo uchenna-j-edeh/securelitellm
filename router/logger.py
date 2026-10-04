@@ -1,6 +1,7 @@
 """JSONL decision record emitter — one line per request."""
 
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -21,6 +22,9 @@ class DecisionLogger:
         with self._lock:
             if self._file:
                 self._file.write(line + "\n")
+                # fsync ensures Docker bind-mount (VirtioFS) propagates the write
+                # to the host before fast-returning actions (e.g. block) complete.
+                os.fsync(self._file.fileno())
             else:
                 print(line, file=sys.stdout, flush=True)
 
