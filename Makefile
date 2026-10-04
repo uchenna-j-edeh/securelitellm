@@ -1,4 +1,4 @@
-.PHONY: lint test test-e2e up down dev eval eval-dry freeze
+.PHONY: lint test test-e2e up down dev eval eval-dry freeze demo-up demo
 
 lint:
 	uv run ruff check .
@@ -27,6 +27,14 @@ eval:
 # Quick dry-run (no Docker needed — just enumerates runs)
 eval-dry:
 	uv run python harness/matrix.py --dry-run
+
+# Demo — prompt injection → exfiltration attack + defense
+demo-up:
+	docker compose -f deploy/docker-compose.yml -f demo/docker-compose.yml up -d --build
+
+demo: demo-up
+	@until curl -sf http://localhost:4000/health/liveliness > /dev/null 2>&1; do sleep 2; done
+	uv run python demo/run.py
 
 # Freeze corpus + env snapshot for reproducibility (#47)
 freeze:

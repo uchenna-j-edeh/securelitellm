@@ -65,6 +65,24 @@ async def chat_completions(request: Request) -> JSONResponse:
     )
 
 
+@app.post("/set-script")
+async def set_script(request: Request) -> dict:
+    """Load a scripted response list at runtime. Resets the call index."""
+    global _script, _call_index
+    _script = await request.json()
+    _call_index = 0
+    return {"loaded": len(_script)}
+
+
+@app.post("/reset-script")
+async def reset_script() -> dict:
+    """Clear the script and reset to echo mode."""
+    global _script, _call_index
+    _script = []
+    _call_index = 0
+    return {"ok": True}
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}

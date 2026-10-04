@@ -27,3 +27,4 @@ harness/logs/*.jsonl
 
 # Local notes
 progress-summary.md
+demo/logs/decisions.jsonl

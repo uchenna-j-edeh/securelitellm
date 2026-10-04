@@ -1,0 +1,11 @@
+# Demo overlay — binds the decision log to demo/logs/ for the demo script to read.
+#
+# Usage (from repo root):
+#   docker compose -f deploy/docker-compose.yml -f demo/docker-compose.yml up -d --build
+
+services:
+  litellm:
+    volumes:
+      - ../demo/logs:/logs
+    environment:
+      - ROUTER_LOG_PATH=/logs/decisions.jsonl
