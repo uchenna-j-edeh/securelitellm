@@ -148,7 +148,12 @@ class RouterHook(CustomLogger):
 
         # Enforcement
         if action == "block":
-            raise PolicyViolation(risk_score, matched_rules)
+            import litellm.exceptions as _le
+            raise _le.BadRequestError(
+                message=str(PolicyViolation(risk_score, matched_rules)),
+                model=data.get("model", ""),
+                llm_provider="",
+            )
 
         if action == "strip-tools":
             data = dict(data)
@@ -243,7 +248,12 @@ class RouterHook(CustomLogger):
         if not self.config.enforce or policy_action == "allow":
             return None
         if policy_action == "block":
-            raise PolicyViolation(risk_score, matched_rules)
+            import litellm.exceptions as _le
+            raise _le.BadRequestError(
+                message=str(PolicyViolation(risk_score, matched_rules)),
+                model=data.get("model", ""),
+                llm_provider="",
+            )
         return _hold_response_tool_calls(response, risk_score, matched_rules)
 
 
