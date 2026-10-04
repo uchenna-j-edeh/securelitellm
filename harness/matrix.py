@@ -168,9 +168,10 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
             print(f"[{mode}/{level}] starting …", flush=True)
 
             if not dry_run:
+                clear_log()  # clear BEFORE container starts so it opens from byte 0
                 start_proxy(mode, level)
                 wait_healthy()
-                clear_log()
+                time.sleep(2)  # grace period — proxy is healthy but hook may still be loading
 
             for scenario in corpus:
                 for seed in range(n_seeds):
