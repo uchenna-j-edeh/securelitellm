@@ -26,6 +26,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from corpus.validate import Scenario
 from harness.decisions import current_log_size, wait_for_decision
 
+# Load deploy/.env so LITELLM_MASTER_KEY is available when run standalone
+_ENV_FILE = Path(__file__).parent.parent / "deploy" / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            if _k not in os.environ:
+                os.environ[_k] = _v
+
 PROXY_URL = os.getenv("PROXY_URL", "http://localhost:4000")
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 DEFAULT_MODEL = "groq/llama-3.1-8b-instant"

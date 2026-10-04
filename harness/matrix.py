@@ -30,12 +30,29 @@ from harness.runner import TurnResult, load_scenario, replay_scenario
 REPO_ROOT = Path(__file__).parent.parent
 COMPOSE_BASE = REPO_ROOT / "deploy" / "docker-compose.yml"
 COMPOSE_OVERRIDE = REPO_ROOT / "harness" / "docker-compose.override.yml"
+ENV_FILE = REPO_ROOT / "deploy" / ".env"
 SCENARIOS_DIR = REPO_ROOT / "corpus" / "scenarios"
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
 RESULTS_CSV = RESULTS_DIR / "results.csv"
 
 PROXY_URL = os.getenv("PROXY_URL", "http://localhost:4000")
 HEALTH_URL = f"{PROXY_URL}/health/liveliness"
+
+
+def _load_env_file() -> None:
+    """Load deploy/.env into os.environ so LITELLM_MASTER_KEY is available for HTTP calls."""
+    if not ENV_FILE.exists():
+        return
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        if key not in os.environ:  # don't override shell env
+            os.environ[key] = val
+
+
+_load_env_file()
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 
 CONFIGS = [
@@ -70,15 +87,10 @@ CSV_FIELDS = [
 
 
 def _compose_cmd(*args: str) -> list[str]:
-    return [
-        "docker",
-        "compose",
-        "-f",
-        str(COMPOSE_BASE),
-        "-f",
-        str(COMPOSE_OVERRIDE),
-        *args,
-    ]
+    cmd = ["docker", "compose", "-f", str(COMPOSE_BASE), "-f", str(COMPOSE_OVERRIDE)]
+    if ENV_FILE.exists():
+        cmd += ["--env-file", str(ENV_FILE)]
+    return [*cmd, *args]
 
 
 def start_proxy(mode: str, level: str) -> None:
