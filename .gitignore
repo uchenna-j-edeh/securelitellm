@@ -12,9 +12,11 @@ dist/
 .env.*
 !.env.example
 
-# Results / data
-eval/results/
-*.csv
+# Results / data (keep directory stubs, ignore generated files)
+eval/results/*.csv
+eval/results/*.json
+eval/results/figures/
+harness/logs/*.jsonl
 
 # IDE
 .vscode/
