@@ -46,9 +46,11 @@ class SessionStore:
             s = self._store.setdefault(session_id, SessionState(session_id=session_id))
             s.sources.append(source)
             s.tainted = True
-            # classify_sources stores content under "content_preview"; fall back to "content"
-            raw = str(source.get("content_preview") or source.get("content", ""))
-            s.tainted_spans.append(hashlib.sha256(raw.encode()).hexdigest())
+            content_hash = source.get("content_hash")
+            if not content_hash:
+                raw = str(source.get("content") or source.get("content_preview", ""))
+                content_hash = hashlib.sha256(raw.encode()).hexdigest()
+            s.tainted_spans.append(str(content_hash))
 
     def record_sink(self, session_id: str, sink: dict[str, Any]) -> None:
         """Record an egress-capable tool call observed after taint."""

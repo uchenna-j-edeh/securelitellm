@@ -21,6 +21,7 @@ import requests
 
 _BASE = os.environ.get("E2E_BASE_URL", "http://localhost:4000")
 _KEY = os.environ.get("E2E_MASTER_KEY", "sk-test-e2e-key")
+_CONTAINER = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
 _HEADERS = {"Authorization": f"Bearer {_KEY}", "Content-Type": "application/json"}
 _TIMEOUT = 10
 
@@ -43,7 +44,7 @@ def _chat(
 def _last_decision_records(n: int = 5) -> list[dict]:
     """Pull the last n JSONL decision records from the litellm container logs."""
     result = subprocess.run(
-        ["docker", "logs", "--tail", "200", "deploy-litellm-1"],
+        ["docker", "logs", "--tail", "200", _CONTAINER],
         capture_output=True,
         text=True,
     )

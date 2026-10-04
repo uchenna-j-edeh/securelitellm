@@ -1,11 +1,14 @@
-.PHONY: lint test up down dev eval eval-dry freeze
+.PHONY: lint test test-e2e up down dev eval eval-dry freeze
 
 lint:
 	uv run ruff check .
 	uv run ruff format --check .
 
 test:
-	uv run pytest tests/ -v
+	uv run pytest tests/ -v --ignore=tests/test_e2e.py
+
+test-e2e:
+	uv run pytest tests/test_e2e.py -v -m e2e
 
 up:
 	docker compose -f deploy/docker-compose.yml up -d --build

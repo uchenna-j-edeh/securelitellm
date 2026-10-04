@@ -15,21 +15,21 @@ _VALID_BACKENDS = ("promptguard", "llmguard", "none")
 
 @dataclass
 class RouterConfig:
-    mode: Mode = "stateless"
-    level: Level = "L0"
+    mode: Mode = "session"
+    level: Level = "L3"
     log_path: str = "-"  # "-" = stdout
     classifier_backend: ClassifierBackend = "none"
-    enforce: bool = False  # False = audit only (log action, never block/strip)
+    enforce: bool = True  # secure by default; set false explicitly for audit-only experiments
     policy_path: str = ""  # empty = use bundled deploy/policy.yaml
     hardened_model: str = "mock"  # model alias to route-hardened requests to
 
     @classmethod
     def from_env(cls) -> "RouterConfig":
-        mode = os.getenv("ROUTER_MODE", "stateless")
-        level = os.getenv("ROUTER_LEVEL", "L0")
+        mode = os.getenv("ROUTER_MODE", "session")
+        level = os.getenv("ROUTER_LEVEL", "L3")
         log_path = os.getenv("ROUTER_LOG_PATH", "-")
         classifier_backend = os.getenv("CLASSIFIER_BACKEND", "none").lower()
-        enforce = os.getenv("ROUTER_ENFORCE", "false").lower() in ("1", "true", "yes")
+        enforce = os.getenv("ROUTER_ENFORCE", "true").lower() in ("1", "true", "yes")
         policy_path = os.getenv("POLICY_PATH", "")
         hardened_model = os.getenv("ROUTER_HARDENED_MODEL", "mock")
 

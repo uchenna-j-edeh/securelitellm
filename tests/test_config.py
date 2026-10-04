@@ -10,11 +10,13 @@ def test_defaults(monkeypatch):
     monkeypatch.delenv("ROUTER_LEVEL", raising=False)
     monkeypatch.delenv("ROUTER_LOG_PATH", raising=False)
     monkeypatch.delenv("CLASSIFIER_BACKEND", raising=False)
+    monkeypatch.delenv("ROUTER_ENFORCE", raising=False)
     cfg = RouterConfig.from_env()
-    assert cfg.mode == "stateless"
-    assert cfg.level == "L0"
+    assert cfg.mode == "session"
+    assert cfg.level == "L3"
     assert cfg.log_path == "-"
     assert cfg.classifier_backend == "none"
+    assert cfg.enforce is True
 
 
 def test_env_overrides(monkeypatch):
@@ -22,11 +24,13 @@ def test_env_overrides(monkeypatch):
     monkeypatch.setenv("ROUTER_LEVEL", "L2")
     monkeypatch.setenv("ROUTER_LOG_PATH", "/tmp/test.jsonl")
     monkeypatch.setenv("CLASSIFIER_BACKEND", "promptguard")
+    monkeypatch.setenv("ROUTER_ENFORCE", "false")
     cfg = RouterConfig.from_env()
     assert cfg.mode == "session"
     assert cfg.level == "L2"
     assert cfg.log_path == "/tmp/test.jsonl"
     assert cfg.classifier_backend == "promptguard"
+    assert cfg.enforce is False
 
 
 def test_invalid_mode(monkeypatch):

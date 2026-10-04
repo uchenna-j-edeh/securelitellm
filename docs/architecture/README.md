@@ -21,8 +21,8 @@ Sequence of a live request through the system:
 5. Risk + Routing Engine fuses content score + taint state → `risk_score + action`
 6. **If block:** proxy rejects with policy reason; agent receives 403
 7. **If allow/downgrade:** source recorded, request forwarded (possibly to safer model)
-8. `async_post_call_success_hook` fires; Sink Inspector records egress tags
-9. Response passed or flagged; agent receives completion (or held for review)
+8. `async_post_call_success_hook` re-scores newly generated tool calls
+9. Safe calls execute; moderate-risk calls are held; confirmed tainted flows are blocked
 
 ![UC-1 runtime interception sequence](uc1-runtime-interception.png)
 

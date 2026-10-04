@@ -7,13 +7,17 @@ environment  = "dev"
 
 github_repo = "uchenna-j-edeh/securelitellm"
 
+# ACM certificate issued in aws_region for the hostname that points to the ALB.
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/replace-me"
+proxy_domain_name   = "securelitellm.example.com"
+
 task_cpu    = 512
 task_memory = 1024
 
-# Experiment settings — flip router_enforce to "true" to enable blocking
+# Secure defaults. Set router_enforce to "false" only for audit-only experiments.
 router_mode    = "session"
 router_level   = "L3"
-router_enforce = "false"
+router_enforce = "true"
 
 classifier_backend    = "promptguard"
 promptguard_threshold = "0.5"

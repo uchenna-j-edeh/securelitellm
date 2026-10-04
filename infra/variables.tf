@@ -22,6 +22,26 @@ variable "github_repo" {
   default     = "uchenna-j-edeh/securelitellm"
 }
 
+variable "acm_certificate_arn" {
+  description = "ARN of an ACM certificate for the public HTTPS listener"
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws:acm:", var.acm_certificate_arn))
+    error_message = "acm_certificate_arn must be a valid AWS ACM certificate ARN."
+  }
+}
+
+variable "proxy_domain_name" {
+  description = "DNS hostname covered by the ACM certificate and pointed at the ALB"
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9.-]+$", var.proxy_domain_name))
+    error_message = "proxy_domain_name must be a valid DNS hostname."
+  }
+}
+
 variable "task_cpu" {
   description = "ECS task CPU units (256 | 512 | 1024 | 2048)"
   type        = number
@@ -51,7 +71,7 @@ variable "router_level" {
 variable "router_enforce" {
   description = "ROUTER_ENFORCE — 'true' blocks requests; 'false' logs only (audit mode)"
   type        = string
-  default     = "false"
+  default     = "true"
 }
 
 variable "classifier_backend" {

@@ -12,6 +12,7 @@ def hook(log_path, monkeypatch):
     monkeypatch.setenv("ROUTER_MODE", "stateless")
     monkeypatch.setenv("ROUTER_LEVEL", "L0")
     monkeypatch.setenv("ROUTER_LOG_PATH", log_path)
+    monkeypatch.setenv("ROUTER_ENFORCE", "false")
     from router.hook import RouterHook
 
     return RouterHook()
@@ -62,6 +63,7 @@ async def test_decision_record_required_fields(hook, log_path, base_data):
         "risk_score",
         "action",
         "latency_ms",
+        "phase",
     ):
         assert field in record, f"missing field: {field}"
 
@@ -72,6 +74,7 @@ async def test_decision_record_values(hook, log_path, base_data):
     record = json.loads(Path(log_path).read_text().strip())
     assert record["mode"] == "stateless"
     assert record["level"] == "L0"
+    assert record["phase"] == "pre_call"
     assert record["action"] == "allow"
     assert record["risk_score"] == 0.0
     assert record["request_id"] == "call-test-001"

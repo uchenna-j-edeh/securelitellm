@@ -12,12 +12,12 @@ services:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - PYTHONPATH=/workspace
-      - ROUTER_MODE=${ROUTER_MODE:-stateless}
-      - ROUTER_LEVEL=${ROUTER_LEVEL:-L0}
+      - ROUTER_MODE=${ROUTER_MODE:-session}
+      - ROUTER_LEVEL=${ROUTER_LEVEL:-L3}
       - ROUTER_LOG_PATH=${ROUTER_LOG_PATH:--}   # default: stdout
       - CLASSIFIER_BACKEND=${CLASSIFIER_BACKEND:-none}
       - PROMPTGUARD_THRESHOLD=${PROMPTGUARD_THRESHOLD:-0.5}
-      - ROUTER_ENFORCE=${ROUTER_ENFORCE:-false}
+      - ROUTER_ENFORCE=${ROUTER_ENFORCE:-true}
       - ROUTER_HARDENED_MODEL=${ROUTER_HARDENED_MODEL:-mock}
       - POLICY_PATH=${POLICY_PATH:-/workspace/deploy/policy.yaml}
     depends_on:

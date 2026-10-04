@@ -13,6 +13,13 @@ thresholds:
   block: 0.9
 
 rules:
+  # Streaming tool calls cannot be synchronously inspected by the current
+  # post-call callback. Block them instead of allowing a timing bypass.
+  - id: streaming_tool_calls_unsupported
+    when:
+      streaming_tool_request: true
+    score: 1.0
+
   # L0 — both flags set: untrusted content arrived AND a sink was called.
   # Moderate risk; route to a more cautious model.
   - id: untrusted_and_sink
@@ -26,6 +33,13 @@ rules:
   - id: classifier_injection
     when:
       classifier_injection: true
+    score: 0.75
+
+  # A configured classifier that returns UNKNOWN is treated as unavailable.
+  # Remove tool access rather than silently failing open.
+  - id: classifier_unavailable
+    when:
+      classifier_error: true
     score: 0.75
 
   # L3 — tainted span hashes found inside a sink's arguments.

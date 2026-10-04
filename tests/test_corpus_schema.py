@@ -51,6 +51,32 @@ def test_assistant_tool_call_valid():
     assert m.tool_calls[0].function.name == "send_email"
 
 
+def test_assistant_empty_tool_calls_fails():
+    with pytest.raises(Exception, match="content or tool_calls"):
+        Message.model_validate({"role": "assistant", "content": None, "tool_calls": []})
+
+
+def test_tool_arguments_must_be_valid_json_object():
+    with pytest.raises(Exception, match="valid JSON"):
+        Message.model_validate(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "send_email", "arguments": "not-json"},
+                    }
+                ],
+            }
+        )
+
+
+def test_unknown_message_field_fails():
+    with pytest.raises(Exception, match="Extra inputs"):
+        Message.model_validate({"role": "user", "content": "hello", "contnet": "typo"})
+
+
 # ---------------------------------------------------------------------------
 # Scenario-level constraints
 # ---------------------------------------------------------------------------
@@ -121,6 +147,16 @@ def test_bn_prefix_valid():
     assert s.id == "bn-099"
 
 
+def test_attack_label_requires_sc_prefix():
+    with pytest.raises(Exception, match="attack scenario ids"):
+        Scenario.model_validate({**_MINIMAL_ATTACK, "id": "bn-001"})
+
+
+def test_benign_label_requires_bn_prefix():
+    with pytest.raises(Exception, match="benign scenario ids"):
+        Scenario.model_validate({**_MINIMAL_BENIGN, "id": "sc-001"})
+
+
 def test_variant_of_without_tag_fails():
     bad = {**_MINIMAL_ATTACK, "variant_of": "sc-001"}
     with pytest.raises(Exception, match="variant"):
@@ -140,6 +176,12 @@ def test_variant_pair_valid():
     assert s.variant_tag == "paraphrase"
 
 
+def test_variant_cannot_reference_itself():
+    bad = {**_MINIMAL_ATTACK, "variant_of": "sc-001", "variant_tag": "paraphrase"}
+    with pytest.raises(Exception, match="itself"):
+        Scenario.model_validate(bad)
+
+
 def test_unknown_class_fails():
     bad = {**_MINIMAL_ATTACK, "class": "social_engineering"}
     with pytest.raises(Exception):
@@ -149,6 +191,12 @@ def test_unknown_class_fails():
 def test_empty_turns_fails():
     bad = {**_MINIMAL_ATTACK, "turns": []}
     with pytest.raises(Exception):
+        Scenario.model_validate(bad)
+
+
+def test_unknown_scenario_field_fails():
+    bad = {**_MINIMAL_ATTACK, "expected_detect": {}}
+    with pytest.raises(Exception, match="Extra inputs"):
         Scenario.model_validate(bad)
 
 
@@ -191,3 +239,19 @@ def test_validate_file_handles_yaml_parse_error(tmp_path):
 def test_corpus_scenario_valid(path):
     errors = validate_file(path)
     assert errors == [], f"{path.name} failed validation:\n" + "\n".join(errors)
+
+
+def test_delayed_exfil_first_turn_has_no_dangerous_sink():
+    import yaml
+
+    from router.policy import PolicyEngine
+    from router.taint import classify_sinks, classify_sources
+
+    raw = yaml.safe_load((SCENARIOS_DIR / "sc-010.yaml").read_text())
+    messages = raw["turns"][0]["messages"]
+    features = {
+        "untrusted_seen": bool(classify_sources(messages)),
+        "sink_requested": bool(classify_sinks(messages)),
+    }
+    _, action, _ = PolicyEngine.from_yaml().evaluate(features)
+    assert action == "allow"

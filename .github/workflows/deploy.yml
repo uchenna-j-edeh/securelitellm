@@ -12,10 +12,26 @@ permissions:
 jobs:
   deploy:
     name: Build → ECR → ECS
+    if: ${{ vars.AWS_DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
     environment: production   # gates on environment protection rules if configured
 
     steps:
+      - name: Validate deployment configuration
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPOSITORY_NAME: ${{ secrets.ECR_REPOSITORY_NAME }}
+          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+        run: |
+          for name in AWS_ROLE_ARN AWS_REGION ECR_REPOSITORY_NAME ECS_CLUSTER ECS_SERVICE; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
       - name: Checkout
         uses: actions/checkout@v4
 
