@@ -8,6 +8,9 @@ Iterates all 8 (mode, level) configurations.  For each config it:
 
 Usage:
     uv run python harness/matrix.py [--seeds N] [--dry-run]
+
+To run with the local DeBERTa classifier:
+    CLASSIFIER_BACKEND=local uv run python harness/matrix.py --seeds 3
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from harness.runner import TurnResult, load_scenario, replay_scenario
 REPO_ROOT = Path(__file__).parent.parent
 COMPOSE_BASE = REPO_ROOT / "deploy" / "docker-compose.yml"
 COMPOSE_OVERRIDE = REPO_ROOT / "harness" / "docker-compose.override.yml"
+COMPOSE_CLASSIFIER = REPO_ROOT / "deploy" / "docker-compose.classifier.yml"
 ENV_FILE = REPO_ROOT / "deploy" / ".env"
 SCENARIOS_DIR = REPO_ROOT / "corpus" / "scenarios"
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
@@ -88,6 +92,9 @@ CSV_FIELDS = [
 
 def _compose_cmd(*args: str) -> list[str]:
     cmd = ["docker", "compose", "-f", str(COMPOSE_BASE), "-f", str(COMPOSE_OVERRIDE)]
+    # Include the classifier sidecar overlay when running with the local backend.
+    if os.environ.get("CLASSIFIER_BACKEND", "none").lower() == "local":
+        cmd += ["-f", str(COMPOSE_CLASSIFIER)]
     if ENV_FILE.exists():
         cmd += ["--env-file", str(ENV_FILE)]
     return [*cmd, *args]
@@ -95,17 +102,23 @@ def _compose_cmd(*args: str) -> list[str]:
 
 def start_proxy(mode: str, level: str) -> None:
     """Restart the proxy stack with new ROUTER_MODE / ROUTER_LEVEL."""
+    classifier_backend = os.environ.get("CLASSIFIER_BACKEND", "none")
     env = {
         **os.environ,
         "ROUTER_MODE": mode,
         "ROUTER_LEVEL": level,
         "ROUTER_ENFORCE": "true",
         "ROUTER_LOG_PATH": "/logs/decisions.jsonl",
+        "CLASSIFIER_BACKEND": classifier_backend,
     }
+    if classifier_backend == "local":
+        env["LOCAL_CLASSIFIER_URL"] = os.environ.get(
+            "LOCAL_CLASSIFIER_URL", "http://local-classifier:8080"
+        )
     # Stop any running stack first
     subprocess.run(_compose_cmd("down", "--remove-orphans"), check=False, capture_output=True)
     subprocess.run(_compose_cmd("up", "-d", "--build"), env=env, check=True, capture_output=True)
-    print(f"  started proxy mode={mode} level={level}", flush=True)
+    print(f"  started proxy mode={mode} level={level} classifier={classifier_backend}", flush=True)
 
 
 def wait_healthy(timeout: float = 120.0) -> None:
@@ -157,7 +170,11 @@ def _row(mode: str, level: str, tr: TurnResult) -> dict:
 def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     corpus = load_corpus()
+    classifier_backend = os.environ.get("CLASSIFIER_BACKEND", "none")
+    # Local classifier may need to download the model on first run (~180 MB).
+    health_timeout = 300.0 if classifier_backend == "local" else 120.0
     print(f"Loaded {len(corpus)} scenarios, {n_seeds} seeds, {len(CONFIGS)} configs")
+    print(f"Classifier backend: {classifier_backend}")
     print(f"Total runs: {len(corpus) * n_seeds * len(CONFIGS)}\n")
 
     with RESULTS_CSV.open("w", newline="") as fh:
@@ -170,7 +187,7 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
             if not dry_run:
                 clear_log()  # clear BEFORE container starts so it opens from byte 0
                 start_proxy(mode, level)
-                wait_healthy()
+                wait_healthy(health_timeout)
                 time.sleep(2)  # grace period — proxy is healthy but hook may still be loading
 
             for scenario in corpus:

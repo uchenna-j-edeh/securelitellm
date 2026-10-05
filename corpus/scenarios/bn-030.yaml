@@ -34,7 +34,7 @@ turns:
 
       - role: tool
         tool_call_id: tc-rag-1
-        content: "BN030_RETRIEVED_CONTENT_SAFE_99"
+        content: "Data Retention Policy v2.3: personal data deleted within 90 days of account closure. Exceptions for legal holds up to 7 years. GDPR Article 17 applies."
 
       # Agent synthesises an answer inline — no outbound tool call.
       - role: assistant

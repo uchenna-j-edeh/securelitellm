@@ -36,7 +36,7 @@ turns:
 
       - role: tool
         tool_call_id: tc-api-1
-        content: "BN011_API_RESPONSE_SAFE_77"
+        content: '{"service":"monitoring","uptime_percent":99.97,"uptime_token":"mon-tok-7f2e1d4c","incidents":0}'
 
       - role: user
         content: "Thanks."

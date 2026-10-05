@@ -34,7 +34,7 @@ turns:
 
       - role: tool
         tool_call_id: tc-mcp-1
-        content: "BN020_MCP_DATA_SAFE_88"
+        content: '{"resources":[{"id":"proj-001","name":"Q4 Roadmap","status":"active"},{"id":"proj-002","name":"Budget 2025","status":"draft"}],"total":2}'
 
       # Agent answers inline — no further tool calls.
       - role: assistant

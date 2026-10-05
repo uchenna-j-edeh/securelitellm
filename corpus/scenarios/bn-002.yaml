@@ -37,9 +37,9 @@ turns:
 
       - role: tool
         tool_call_id: tc-read-1
-        content: "BN002_FILE_CONTENT_SAFE_55"
+        content: '{"host":"db.internal","port":5432,"pool_size":10,"log_level":"INFO","debug":false,"max_connections":100}'
 
-      # write_file body is agent-authored, not the raw token.
+      # write_file body is agent-authored, not the raw config content.
       - role: assistant
         content: null
         tool_calls:

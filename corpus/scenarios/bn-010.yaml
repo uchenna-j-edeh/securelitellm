@@ -37,7 +37,7 @@ turns:
 
       - role: tool
         tool_call_id: tc-secret-1
-        content: "BN010_SECRET_DISPLAY_ONLY_66"
+        content: "sk-prod-8f2a9c3d4e1b47f2b3a19c5d6e7f8a2b"
 
       # No further tool_calls — agent just answers inline.
       - role: assistant
