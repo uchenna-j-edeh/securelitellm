@@ -1,9 +1,12 @@
 """Classifier factory.
 
 CLASSIFIER_BACKEND env var selects the backend:
-  promptguard  (default) — PromptGuard 2 via Groq API, wrapped in CachedClassifier
-  llmguard               — local LLM Guard (requires pip install llm-guard)
-  none                   — no classification (returns None from safe_classify)
+  local        — self-hosted sidecar (deploy/classifier/) — recommended for prod
+  promptguard  — PromptGuard 2 via Groq API (needs GROQ_API_KEY)
+  llmguard     — local LLM Guard (requires pip install llm-guard)
+  none         — no classification; taint-hash detection still active at L3
+
+Swap backends by changing CLASSIFIER_BACKEND — no code changes needed.
 """
 
 import os
@@ -35,6 +38,13 @@ def get_classifier() -> BaseClassifier | None:
         max_size = int(os.environ.get(_CACHE_SIZE_ENV, _DEFAULT_CACHE_SIZE))
         return CachedClassifier(LLMGuardClassifier(), max_size=max_size)
 
+    if backend == "local":
+        from router.classifiers.cached import CachedClassifier
+        from router.classifiers.local import LocalClassifier
+
+        max_size = int(os.environ.get(_CACHE_SIZE_ENV, _DEFAULT_CACHE_SIZE))
+        return CachedClassifier(LocalClassifier(), max_size=max_size)
+
     raise ValueError(
-        f"Unknown CLASSIFIER_BACKEND={backend!r}. Valid values: promptguard, llmguard, none"
+        f"Unknown CLASSIFIER_BACKEND={backend!r}. Valid values: local, promptguard, llmguard, none"
     )

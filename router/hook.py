@@ -52,9 +52,12 @@ def _extract_features(
     if mode == "session":
         store = get_store()
         state = store.state(session_id)
-        features["untrusted_seen"] = state.tainted or len(sources) > 0
+        # Session mode: untrusted_seen only when content was actually flagged as
+        # tainted (by classifier or fail-closed without classifier). This prevents
+        # clean read→write flows from triggering false positives.
+        features["untrusted_seen"] = state.tainted
     else:
-        # Stateless: per-request only, no session state
+        # Stateless: no session memory, fall back to structural signal
         features["untrusted_seen"] = len(sources) > 0
 
     if level in ("L1", "L2", "L3"):
@@ -97,20 +100,32 @@ class RouterHook(CustomLogger):
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
         features["streaming_tool_request"] = bool(data.get("stream") and data.get("tools"))
 
-        # Record sources into session store (session mode only)
+        sources = classify_sources(messages)
+        classifier_verdicts: list[dict] = []
+
+        # L2/L3: run classifier BEFORE recording sources so the taint decision
+        # can use the verdict — clean content should not poison the session.
+        if self.config.level in ("L2", "L3") and self._classifier is not None:
+            classifier_verdicts = await _classify_sources(self._classifier, sources)
+            features["classifier_verdicts"] = classifier_verdicts
+            features["classifier_injection"] = any(
+                v.get("label") == "INJECTION" for v in classifier_verdicts
+            )
+            features["classifier_error"] = any(
+                v.get("label") == "UNKNOWN" for v in classifier_verdicts
+            )
+
+        # Record sources into session store (session mode only).
+        # With classifier:    only taint sources flagged INJECTION — clean content passes through.
+        # Without classifier: taint all sources (fail-closed, same as before).
         if self.config.mode == "session":
             store = get_store()
-            for src in classify_sources(messages):
-                store.record_source(session_id, src)
-
-        # L2/L3: run classifier over each untrusted source
-        if self.config.level in ("L2", "L3") and self._classifier is not None:
-            sources = classify_sources(messages)
-            verdicts = await _classify_sources(self._classifier, sources)
-            features["classifier_verdicts"] = verdicts
-            # Derived flag consumed by policy rules
-            features["classifier_injection"] = any(v.get("label") == "INJECTION" for v in verdicts)
-            features["classifier_error"] = any(v.get("label") == "UNKNOWN" for v in verdicts)
+            injected_ids = {
+                v["source_id"] for v in classifier_verdicts if v.get("label") == "INJECTION"
+            }
+            for src in sources:
+                taint = not classifier_verdicts or src.get("tool_call_id") in injected_ids
+                store.record_source(session_id, src, taint=taint)
 
         # M4: evaluate policy rules → risk score → action
         risk_score, action, matched_rules = self._policy.evaluate(features)

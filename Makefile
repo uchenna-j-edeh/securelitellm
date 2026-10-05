@@ -1,4 +1,4 @@
-.PHONY: lint test test-e2e up down dev eval eval-dry freeze
+.PHONY: lint test test-e2e up down dev eval eval-dry freeze classifier-up
 
 lint:
 	uv run ruff check .
@@ -27,6 +27,11 @@ eval:
 # Quick dry-run (no Docker needed — just enumerates runs)
 eval-dry:
 	uv run python harness/matrix.py --dry-run
+
+# Local classifier sidecar — DeBERTa prompt-injection model (downloads ~180 MB on first run)
+# Swap model: CLASSIFIER_MODEL=<hf-model-id> make classifier-up
+classifier-up:
+	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.classifier.yml up -d --build
 
 # Freeze corpus + env snapshot for reproducibility (#47)
 freeze:
