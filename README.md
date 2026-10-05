@@ -277,7 +277,9 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `ROUTER_LEVEL` | `L3` | `L0`, `L1`, `L2`, `L3` |
 | `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path |
-| `CLASSIFIER_BACKEND` | `none` | `none`, `promptguard`, `llmguard` |
+| `CLASSIFIER_BACKEND` | `none` | `none`, `local`, `promptguard`, `llmguard` |
+| `LOCAL_CLASSIFIER_URL` | `http://local-classifier:8080` | URL of the local classifier sidecar |
+| `CLASSIFIER_MODEL` | `protectai/deberta-v3-base-prompt-injection-v2` | any HuggingFace text-classification model |
 
 ### Tool-call decisions
 
@@ -297,6 +299,104 @@ tools are treated as potentially dangerous.
 
 For AWS deployment, including HTTPS, OIDC, required secrets, and the explicit
 deployment enable switch, see [`infra/README.md`](infra/README.md).
+
+---
+
+## Running the evaluation
+
+The evaluation replays the attack corpus across all 8 configurations (2 modes × 4 levels), writes every turn result to `eval/results/results.csv`, then computes metrics.
+
+### Without a classifier (structural detection only)
+
+```bash
+# Stack must be down — the harness manages it
+make eval
+```
+
+Runs all 8 configs with `CLASSIFIER_BACKEND=none`. L0/L1 use only structural features (source/sink co-presence). L2/L3 use session taint-hash matching.
+
+### With the local DeBERTa classifier
+
+```bash
+# Build the classifier sidecar once (downloads ~180 MB on first run)
+make classifier-up
+
+# Run the full matrix — CLASSIFIER_BACKEND=local starts the sidecar automatically
+CLASSIFIER_BACKEND=local uv run python harness/matrix.py --seeds 3
+uv run python eval/metrics.py --table --figures
+```
+
+Or swap to a different HuggingFace model:
+
+```bash
+CLASSIFIER_MODEL=meta-llama/Prompt-Guard-86M CLASSIFIER_BACKEND=local \
+  uv run python harness/matrix.py --seeds 3
+```
+
+### Quick dry-run (no Docker needed)
+
+```bash
+make eval-dry
+```
+
+Enumerates all runs without starting the proxy — useful to check corpus coverage before a full run.
+
+---
+
+## Interpreting results
+
+After `make eval`, `eval/results/results.csv` contains one row per (mode, level, scenario, turn, seed). `eval/metrics.py --table` prints the summary table.
+
+### Metrics
+
+| Metric | Definition |
+|---|---|
+| **DR** (Detection Rate) | fraction of attack turns where the router took any non-allow action (route-hardened, strip-tools, block) |
+| **Block-DR** | fraction of attack turns where the router issued `block` specifically |
+| **FPR** (False Positive Rate) | fraction of benign turns where the router took any non-allow action |
+| **Block-FPR** | fraction of benign turns where the router issued `block` — the stricter metric for production use |
+
+### Expected pattern
+
+| Mode | Level | DR | FPR | Notes |
+|---|---|---|---|---|
+| stateless | L0 | moderate | high | source+sink co-presence only; many benign route-hardens |
+| stateless | L3 | moderate | moderate | adds taint-hash check but no session memory |
+| **session** | **L0** | **high** | low | session taint catches delayed exfil that stateless misses |
+| **session** | **L3** | **highest** | **lowest** | full taint-hash + session memory; best trade-off |
+
+The key research finding: **stateless routing misses multi-turn delayed exfiltration** (sc-010 class) entirely because Turn 2 carries no tool result; session routing catches it because the taint from Turn 1 persists in the store.
+
+### Classifier effect (L2/L3 with `CLASSIFIER_BACKEND=local`)
+
+Adding the DeBERTa classifier changes two things:
+
+1. **Lower FPR** — benign tool content (config files, API responses) is classified BENIGN and its hash is *not* added to `tainted_spans`. A subsequent clean write is no longer blocked.
+2. **Earlier detection** — injection text in a tool result is flagged in the pre-call hook (`strip-tools` action) before the LLM generates the sink call, rather than waiting for the post-call hook hash-match (`block`).
+
+Without a classifier at L3, the session store treats *every* tool result as tainted (fail-closed). This produces zero block-FPR but inflates route-hardened FPR. With the classifier, only content flagged INJECTION is tainted.
+
+### Decision log fields
+
+Each JSONL record in `harness/logs/decisions.jsonl` (or container stdout) contains:
+
+```jsonc
+{
+  "phase": "pre_call" | "post_call",
+  "session_id": "...",            // from x-agent-run-id header
+  "action": "allow" | "route-hardened" | "strip-tools" | "block",
+  "risk_score": 0.90,             // 0.0–1.0; threshold for block is 0.85
+  "matched_rules": ["tainted_in_sink_args"],
+  "features": {
+    "untrusted_seen": true,       // session has seen a tainted tool result
+    "sink_requested": true,       // request contains an exfil-capable tool call
+    "tainted_spans_in_sink_args": true,  // L3: sink body hash == tainted source hash
+    "classifier_verdicts": [      // L2/L3 with classifier
+      {"label": "INJECTION", "score": 1.0, "source_id": "tc-1", "cached": false}
+    ]
+  }
+}
+```
 
 ---
 

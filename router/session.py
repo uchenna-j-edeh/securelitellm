@@ -40,17 +40,23 @@ class SessionStore:
                 self._store[session_id] = s
             return s
 
-    def record_source(self, session_id: str, source: dict[str, Any]) -> None:
-        """Mark that untrusted content entered the session context."""
+    def record_source(self, session_id: str, source: dict[str, Any], *, taint: bool = True) -> None:
+        """Record that a tool result entered the session context.
+
+        taint=True  — content was flagged as injection; hash added to tainted_spans.
+        taint=False — content is clean; tracked but does not poison the session.
+                      Use this when a classifier has confirmed the content is safe.
+        """
         with self._lock:
             s = self._store.setdefault(session_id, SessionState(session_id=session_id))
             s.sources.append(source)
-            s.tainted = True
-            content_hash = source.get("content_hash")
-            if not content_hash:
-                raw = str(source.get("content") or source.get("content_preview", ""))
-                content_hash = hashlib.sha256(raw.encode()).hexdigest()
-            s.tainted_spans.append(str(content_hash))
+            if taint:
+                s.tainted = True
+                content_hash = source.get("content_hash")
+                if not content_hash:
+                    raw = str(source.get("content") or source.get("content_preview", ""))
+                    content_hash = hashlib.sha256(raw.encode()).hexdigest()
+                s.tainted_spans.append(str(content_hash))
 
     def record_sink(self, session_id: str, sink: dict[str, Any]) -> None:
         """Record an egress-capable tool call observed after taint."""

@@ -1,0 +1,43 @@
+# Classifier overlay — adds the local DeBERTa injection classifier sidecar
+# and wires it into the router.
+#
+# Swap to a different backend by changing CLASSIFIER_MODEL inside the
+# classifier service (any HuggingFace text-classification model works)
+# without touching any router Python code.
+#
+# Usage (from repo root):
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.classifier.yml \
+#                  up -d --build
+#
+# First start downloads ~180 MB model; subsequent starts use the named volume.
+
+services:
+  local-classifier:
+    build:
+      context: ./classifier
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - hf_model_cache:/model_cache
+    environment:
+      - CLASSIFIER_MODEL=${CLASSIFIER_MODEL:-protectai/deberta-v3-base-prompt-injection-v2}
+      - CLASSIFIER_MAX_LENGTH=${CLASSIFIER_MAX_LENGTH:-512}
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s   # model download can take a while on first run
+
+  litellm:
+    environment:
+      - CLASSIFIER_BACKEND=local
+      - LOCAL_CLASSIFIER_URL=http://local-classifier:8080
+    depends_on:
+      local-classifier:
+        condition: service_healthy
+
+volumes:
+  hf_model_cache:
