@@ -14,6 +14,7 @@ Start the demo stack (from repo root):
 Then run:
   uv run python demo/run.py
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -31,9 +32,9 @@ import httpx
 # Demo config
 # ---------------------------------------------------------------------------
 
-MOCK_URL  = "http://localhost:8001"
+MOCK_URL = "http://localhost:8001"
 PROXY_URL = "http://localhost:4000"
-MODEL     = "mock"
+MODEL = "mock"
 
 # This string is the "poisoned config file" content.
 # MUST match byte-for-byte the send_email body in demo/mock_script.json.
@@ -84,14 +85,14 @@ TOOLS = [
 # Terminal helpers
 # ---------------------------------------------------------------------------
 
-RST  = "\033[0m"
+RST = "\033[0m"
 BOLD = "\033[1m"
-DIM  = "\033[2m"
-RED  = "\033[91m"
-GRN  = "\033[92m"
-YLW  = "\033[93m"
-BLU  = "\033[94m"
-CYN  = "\033[96m"
+DIM = "\033[2m"
+RED = "\033[91m"
+GRN = "\033[92m"
+YLW = "\033[93m"
+BLU = "\033[94m"
+CYN = "\033[96m"
 
 
 def bar(text: str, color: str = BLU) -> None:
@@ -117,6 +118,7 @@ def pause(s: float = 0.7) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _master_key() -> str:
     key = os.environ.get("LITELLM_MASTER_KEY", "")
@@ -164,15 +166,25 @@ def _last_decision(session_id: str, log_path: Path) -> dict | None:
     # Fallback: docker exec
     try:
         cid_out = subprocess.run(
-            ["docker", "ps", "--filter", "label=com.docker.compose.service=litellm",
-             "--format", "{{.ID}}"],
-            capture_output=True, text=True, timeout=5,
+            [
+                "docker",
+                "ps",
+                "--filter",
+                "label=com.docker.compose.service=litellm",
+                "--format",
+                "{{.ID}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         ).stdout.strip()
         cid = cid_out.splitlines()[0] if cid_out else ""
         if cid:
             raw = subprocess.run(
                 ["docker", "exec", cid, "sh", "-c", "cat /logs/decisions.jsonl 2>/dev/null"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             ).stdout
             for line in reversed(raw.splitlines()):
                 line = line.strip()
@@ -207,14 +219,18 @@ def _load_mock_script() -> bool:
 
 
 def _check_stack() -> dict[str, bool]:
-    mock_ok  = _chat(MOCK_URL,  [{"role": "user", "content": "ping"}])[0] == 200
-    proxy_ok = _chat(PROXY_URL, [{"role": "user", "content": "ping"}], key=_master_key())[0] in (200, 400)
+    mock_ok = _chat(MOCK_URL, [{"role": "user", "content": "ping"}])[0] == 200
+    proxy_ok = _chat(PROXY_URL, [{"role": "user", "content": "ping"}], key=_master_key())[0] in (
+        200,
+        400,
+    )
     return {"mock": mock_ok, "proxy": proxy_ok}
 
 
 # ---------------------------------------------------------------------------
 # Act 1 — UNPROTECTED (direct to LLM, no proxy)
 # ---------------------------------------------------------------------------
+
 
 def act1() -> tuple[dict, dict] | None:
     """Returns (turn1_tool_call_fn, turn2_tool_call_fn) for reference, or None on error."""
@@ -231,13 +247,17 @@ def act1() -> tuple[dict, dict] | None:
     status, body = _chat(MOCK_URL, msgs)
     if status != 200:
         tag(RED, "ERR", f"mock model returned {status} — is the stack up with demo overlay?")
-        tag(DIM, "HNT", "docker compose -f deploy/docker-compose.yml -f demo/docker-compose.yml up -d --build")
+        tag(
+            DIM,
+            "HNT",
+            "docker compose -f deploy/docker-compose.yml -f demo/docker-compose.yml up -d --build",
+        )
         return None
 
     msg1 = body["choices"][0]["message"]
-    tc1  = (msg1.get("tool_calls") or [{}])[0]
-    fn1  = tc1.get("function", {})
-    tag(YLW, "LLM", f"calls {BOLD}{fn1.get('name','?')}{RST}({fn1.get('arguments','')})")
+    tc1 = (msg1.get("tool_calls") or [{}])[0]
+    fn1 = tc1.get("function", {})
+    tag(YLW, "LLM", f"calls {BOLD}{fn1.get('name', '?')}{RST}({fn1.get('arguments', '')})")
     pause(0.8)
 
     # Execute tool — returns poisoned config
@@ -270,18 +290,18 @@ def act1() -> tuple[dict, dict] | None:
         return None
 
     msg2 = body2["choices"][0]["message"]
-    tc2  = (msg2.get("tool_calls") or [{}])[0]
-    fn2  = tc2.get("function", {})
+    tc2 = (msg2.get("tool_calls") or [{}])[0]
+    fn2 = tc2.get("function", {})
     args2: dict = json.loads(fn2.get("arguments", "{}"))
 
-    tag(RED, "LLM", f"calls {BOLD}{fn2.get('name','?')}{RST} — hijacked by injection!")
-    print(f"    {RED}  to      → {args2.get('to','?')}{RST}")
-    print(f"    {RED}  subject → {args2.get('subject','?')}{RST}")
+    tag(RED, "LLM", f"calls {BOLD}{fn2.get('name', '?')}{RST} — hijacked by injection!")
+    print(f"    {RED}  to      → {args2.get('to', '?')}{RST}")
+    print(f"    {RED}  subject → {args2.get('subject', '?')}{RST}")
     body_preview = args2.get("body", "")[:70].replace("\n", " ")
     print(f"    {RED}  body    → {body_preview}...{RST}")
     pause(0.8)
 
-    print(f"\n  {RED}{BOLD}✗  ATTACK SUCCEEDED — config exfiltrated to {args2.get('to','?')}{RST}")
+    print(f"\n  {RED}{BOLD}✗  ATTACK SUCCEEDED — config exfiltrated to {args2.get('to', '?')}{RST}")
     pause(1.2)
     return fn1, fn2
 
@@ -289,6 +309,7 @@ def act1() -> tuple[dict, dict] | None:
 # ---------------------------------------------------------------------------
 # Act 2 — PROTECTED (through SecureLiteLLM proxy)
 # ---------------------------------------------------------------------------
+
 
 def act2(session_id: str, log_path: Path) -> None:
     bar("ACT 2  —  PROTECTED  (agent → SecureLiteLLM proxy → LLM)", GRN)
@@ -307,7 +328,7 @@ def act2(session_id: str, log_path: Path) -> None:
     ]
     status, body = _chat(PROXY_URL, msgs, key=key, session_id=session_id)
     if status == 0:
-        tag(RED, "ERR", f"proxy unreachable — is the stack running?")
+        tag(RED, "ERR", "proxy unreachable — is the stack running?")
         return
     if status != 200:
         tag(RED, "ERR", f"proxy returned {status}")
@@ -315,9 +336,9 @@ def act2(session_id: str, log_path: Path) -> None:
 
     tag(GRN, "proxy", "pre-call ALLOW (no sink in request)")
     msg1 = body["choices"][0]["message"]
-    tc1  = (msg1.get("tool_calls") or [{}])[0]
-    fn1  = tc1.get("function", {})
-    tag(YLW, "LLM",   f"calls {BOLD}{fn1.get('name','?')}{RST}({fn1.get('arguments','')})")
+    tc1 = (msg1.get("tool_calls") or [{}])[0]
+    fn1 = tc1.get("function", {})
+    tag(YLW, "LLM", f"calls {BOLD}{fn1.get('name', '?')}{RST}({fn1.get('arguments', '')})")
     pause(0.8)
 
     # Execute tool
@@ -346,7 +367,7 @@ def act2(session_id: str, log_path: Path) -> None:
 
     if status2 == 400:
         tag(GRN, "proxy", "post-call hook fires on LLM response")
-        tag(GRN, "proxy", f"send_email body sha256 matches tainted source  ✓")
+        tag(GRN, "proxy", "send_email body sha256 matches tainted source  ✓")
         tag(GRN, "proxy", "rule: tainted_in_sink_args  score=0.90  action=BLOCK")
         tag(GRN, "proxy", "raises BadRequestError → HTTP 400 → exfil suppressed")
         print(f"\n  {GRN}{BOLD}✓  ATTACK BLOCKED — exfil tool call never executed{RST}")
@@ -356,7 +377,11 @@ def act2(session_id: str, log_path: Path) -> None:
         time.sleep(0.4)
         rec = _last_decision(session_id, log_path)
         if rec:
-            safe = {k: rec[k] for k in ("ts", "phase", "session_id", "action", "matched_rules", "risk_score") if k in rec}
+            safe = {
+                k: rec[k]
+                for k in ("ts", "phase", "session_id", "action", "matched_rules", "risk_score")
+                if k in rec
+            }
             print(f"\n  {DIM}Decision log record:{RST}")
             for line in json.dumps(safe, indent=4).splitlines():
                 print(f"    {DIM}{line}{RST}")
@@ -374,24 +399,30 @@ def act2(session_id: str, log_path: Path) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     # Print banner
     print(f"\n{BOLD}{BLU}{'═' * 68}")
-    print(f"  SecureLiteLLM  ·  Fleet Management Agent Demo")
+    print("  SecureLiteLLM  ·  Fleet Management Agent Demo")
     print(f"{'═' * 68}{RST}")
     print(f"\n  {DIM}Scenario: an AI fleet-management agent audits server configs.")
-    print(f"  An attacker has planted a prompt injection in a config file,")
+    print("  An attacker has planted a prompt injection in a config file,")
     print(f"  attempting to hijack the agent into exfiltrating secrets.{RST}\n")
 
     # Check stack
     print(f"  {DIM}Checking services...{RST}")
     health = _check_stack()
-    ok_str  = lambda up: f"{GRN}UP{RST}" if up else f"{RED}DOWN{RST}"
+
+    def ok_str(up: bool) -> str:
+        return f"{GRN}UP{RST}" if up else f"{RED}DOWN{RST}"
+
     print(f"    mock model  {ok_str(health['mock'])}   ({MOCK_URL})")
     print(f"    proxy       {ok_str(health['proxy'])}   ({PROXY_URL})")
     if not health["mock"] or not health["proxy"]:
         print(f"\n  {YLW}Start the demo stack and retry:{RST}")
-        print(f"  {DIM}docker compose -f deploy/docker-compose.yml -f demo/docker-compose.yml up -d --build{RST}\n")
+        print(
+            f"  {DIM}docker compose -f deploy/docker-compose.yml -f demo/docker-compose.yml up -d --build{RST}\n"
+        )
         sys.exit(1)
 
     # Load scripted LLM responses into mock model
@@ -403,7 +434,7 @@ def main() -> None:
     print(f"{GRN}OK{RST}")
 
     session_id = f"demo-{uuid.uuid4().hex[:8]}"
-    log_path   = Path(__file__).parent / "logs" / "decisions.jsonl"
+    log_path = Path(__file__).parent / "logs" / "decisions.jsonl"
 
     pause(1.0)
 
@@ -417,12 +448,12 @@ def main() -> None:
     act2(session_id, log_path)
 
     print(f"\n{BOLD}{GRN}{'═' * 68}")
-    print(f"  Summary")
+    print("  Summary")
     print(f"{'─' * 68}{RST}")
     print(f"  {DIM}Without proxy → LLM follows the injected directive; exfil succeeds.")
-    print(f"  With proxy    → Session-aware L3 taint tracking catches the chain:")
-    print(f"    1. tool result (untrusted source) → hash recorded in session store")
-    print(f"    2. LLM generates send_email with body == poisoned content")
+    print("  With proxy    → Session-aware L3 taint tracking catches the chain:")
+    print("    1. tool result (untrusted source) → hash recorded in session store")
+    print("    2. LLM generates send_email with body == poisoned content")
     print(f"    3. post-call hook: body sha256 in tainted spans → BLOCK{RST}")
     print(f"\n  {BOLD}Taint hash:{RST}  {DIM}{hashlib.sha256(POISONED.encode()).hexdigest()}{RST}")
     print(f"{GRN}{BOLD}{'═' * 68}{RST}\n")
