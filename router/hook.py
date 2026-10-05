@@ -126,6 +126,9 @@ class RouterHook(CustomLogger):
             for src in sources:
                 taint = not classifier_verdicts or src.get("tool_call_id") in injected_ids
                 store.record_source(session_id, src, taint=taint)
+            # Refresh after recording so the logged feature and policy both see
+            # taint set by tool results in the current request.
+            features["untrusted_seen"] = store.state(session_id).tainted
 
         # M4: evaluate policy rules → risk score → action
         risk_score, action, matched_rules = self._policy.evaluate(features)
