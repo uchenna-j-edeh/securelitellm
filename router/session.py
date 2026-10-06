@@ -54,7 +54,7 @@ class SessionStore:
                 s.tainted = True
                 content_hash = source.get("content_hash")
                 if not content_hash:
-                    raw = str(source.get("content") or source.get("content_preview", ""))
+                    raw = str(source.get("content") or source.get("content_for_classifier", ""))
                     content_hash = hashlib.sha256(raw.encode()).hexdigest()
                 s.tainted_spans.append(str(content_hash))
 
