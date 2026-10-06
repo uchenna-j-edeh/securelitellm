@@ -58,7 +58,6 @@ async def chat(request: Request) -> StreamingResponse:
 
     def stream():
         assistant_content = None
-        tool_results_seen: list[dict] = []
 
         for event in run_chat(
             user_message=user_message,
@@ -103,7 +102,7 @@ async def outbox() -> dict:
     p = LOGS_DIR / "outbox.jsonl"
     if not p.exists():
         return {"emails": []}
-    return {"emails": [json.loads(l) for l in p.read_text().splitlines() if l.strip()][-20:]}
+    return {"emails": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]}
 
 
 @app.get("/webhook_log")
@@ -111,7 +110,7 @@ async def webhook_log() -> dict:
     p = LOGS_DIR / "webhook_log.jsonl"
     if not p.exists():
         return {"posts": []}
-    return {"posts": [json.loads(l) for l in p.read_text().splitlines() if l.strip()][-20:]}
+    return {"posts": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]}
 
 
 @app.delete("/logs")
