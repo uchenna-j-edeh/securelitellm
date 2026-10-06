@@ -8,6 +8,8 @@ test:
 	uv run pytest tests/ -v --ignore=tests/test_e2e.py
 
 test-e2e:
+	@set -a && [ -f deploy/.env ] && . deploy/.env; set +a; \
+	E2E_MASTER_KEY="$${LITELLM_MASTER_KEY:-$$E2E_MASTER_KEY}" \
 	uv run pytest tests/test_e2e.py -v -m e2e
 
 up:
