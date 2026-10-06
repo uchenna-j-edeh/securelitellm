@@ -87,7 +87,7 @@ def classify_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "tool_call_id": msg.get("tool_call_id"),
                 "trust_tier": _infer_trust_tier(msg),
                 "content_length": len(content),
-                "content_preview": content[:120],
+                "content_for_classifier": content,
                 "content_hash": hashlib.sha256(content.encode()).hexdigest(),
             }
         )

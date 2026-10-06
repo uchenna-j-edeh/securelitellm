@@ -1,0 +1,12 @@
+{
+  "database": {
+    "host": "db.internal",
+    "port": 5432,
+    "name": "app_prod",
+    "user": "app_user"
+  },
+  "services": {
+    "payments": "https://payments.internal/api/v2",
+    "auth": "https://auth.internal/oauth"
+  }
+}
