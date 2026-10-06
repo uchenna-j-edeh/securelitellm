@@ -98,7 +98,7 @@ def send_email(to: str, subject: str = "", body: str = "") -> dict:
         f.write(json.dumps(record) + "\n")
     # Write individual readable file so it appears in Finder / can be tail-watched
     slug = now.strftime("%Y%m%d_%H%M%S")
-    email_file = EMAILS_DIR / f"{slug}_{to.replace('@','_at_').replace('/','_')}.txt"
+    email_file = EMAILS_DIR / f"{slug}_{to.replace('@', '_at_').replace('/', '_')}.txt"
     email_file.write_text(
         f"Date:    {now.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
         f"To:      {to}\n"
@@ -148,9 +148,7 @@ TOOL_SCHEMAS = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "The URL to fetch."}
-                },
+                "properties": {"url": {"type": "string", "description": "The URL to fetch."}},
                 "required": ["url"],
             },
         },
@@ -182,7 +180,10 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "filename": {"type": "string", "description": "Filename to read (basename only)."}
+                    "filename": {
+                        "type": "string",
+                        "description": "Filename to read (basename only).",
+                    }
                 },
                 "required": ["filename"],
             },

@@ -96,7 +96,9 @@ def run_chat(
 
         # Detect strip-tools: proxy replaced tool calls with a hold notice
         if "SecureLiteLLM held" in content:
-            yield _event("intercepted", action="strip-tools", message=content, session_id=session_id)
+            yield _event(
+                "intercepted", action="strip-tools", message=content, session_id=session_id
+            )
             return
 
         if tool_calls:
@@ -123,11 +125,13 @@ def run_chat(
                 result_str = json.dumps(result)
                 yield _event("tool_result", name=name, result=result, call_id=tc["id"])
 
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result_str,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result_str,
+                    }
+                )
         else:
             # Final text response
             messages.append({"role": "assistant", "content": content})

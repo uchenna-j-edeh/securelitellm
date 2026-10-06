@@ -102,7 +102,9 @@ async def outbox() -> dict:
     p = LOGS_DIR / "outbox.jsonl"
     if not p.exists():
         return {"emails": []}
-    return {"emails": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]}
+    return {
+        "emails": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]
+    }
 
 
 @app.get("/webhook_log")
@@ -110,7 +112,9 @@ async def webhook_log() -> dict:
     p = LOGS_DIR / "webhook_log.jsonl"
     if not p.exists():
         return {"posts": []}
-    return {"posts": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]}
+    return {
+        "posts": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]
+    }
 
 
 @app.delete("/logs")
@@ -126,7 +130,9 @@ def _decisions_for_session(session_id: str) -> list[dict]:
     try:
         result = subprocess.run(
             ["docker", "logs", "--tail", "200", CONTAINER_NAME],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         records = []
         for line in (result.stdout + result.stderr).splitlines():
@@ -146,4 +152,5 @@ def _decisions_for_session(session_id: str) -> list[dict]:
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("DEMO_PORT", "8003")))
