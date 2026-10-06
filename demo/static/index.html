@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>SecureLiteLLM — Browsing Agent</title>
+  <style>
+    :root {
+      --bg:#0f1117; --surface:#1a1d27; --surface2:#22263a;
+      --border:#2a2d3e; --text:#e2e8f0; --muted:#8892a4;
+      --accent:#6366f1; --green:#22c55e; --amber:#f59e0b;
+      --red:#ef4444; --blue:#60a5fa; --cyan:#22d3ee;
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
+         height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+
+    /* ── Header ── */
+    header{padding:12px 20px;border-bottom:1px solid var(--border);
+           display:flex;align-items:center;gap:12px;flex-shrink:0;}
+    header h1{font-size:1rem;font-weight:700;letter-spacing:-.01em;}
+    .pill{font-size:.7rem;padding:2px 9px;border-radius:12px;font-weight:600;}
+    .pill-indigo{background:#312e81;color:#a5b4fc;}
+    .pill-green{background:#14532d;color:#86efac;}
+    .pill-red{background:#450a0a;color:#fca5a5;}
+    .spacer{flex:1;}
+    .header-status{font-size:.75rem;color:var(--muted);display:flex;align-items:center;gap:6px;}
+    .dot{width:7px;height:7px;border-radius:50%;background:var(--green);}
+
+    /* ── Main layout ── */
+    .main{display:flex;flex:1;overflow:hidden;}
+
+    /* ── Left: chat ── */
+    .chat-panel{display:flex;flex-direction:column;flex:1;border-right:1px solid var(--border);min-width:0;}
+
+    .quick-tasks{display:flex;gap:8px;padding:10px 16px;border-bottom:1px solid var(--border);
+                 flex-wrap:wrap;flex-shrink:0;}
+    .qt{padding:5px 12px;border-radius:20px;border:1px solid var(--border);background:var(--surface);
+        color:var(--muted);font-size:.75rem;cursor:pointer;transition:all .15s;white-space:nowrap;}
+    .qt:hover{border-color:var(--accent);color:var(--text);}
+    .qt.attack{border-color:#7f1d1d55;color:#f87171;}
+    .qt.attack:hover{border-color:var(--red);color:var(--red);}
+
+    .messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;}
+
+    /* message bubbles */
+    .msg{display:flex;gap:10px;align-items:flex-start;max-width:100%;}
+    .msg.user{flex-direction:row-reverse;}
+    .avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;
+             justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0;}
+    .av-user{background:var(--accent);color:#fff;}
+    .av-agent{background:var(--surface2);color:var(--cyan);}
+    .bubble{padding:10px 14px;border-radius:12px;font-size:.85rem;line-height:1.6;
+            max-width:calc(100% - 44px);word-break:break-word;}
+    .msg.user .bubble{background:var(--accent);color:#fff;border-bottom-right-radius:3px;}
+    .msg.agent .bubble{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:3px;}
+
+    /* tool rows */
+    .tool-row{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-radius:8px;
+              font-size:.78rem;font-family:monospace;margin-left:38px;}
+    .tool-row.call{background:#0f1e2d;border:1px solid #1e3a4a;color:var(--blue);}
+    .tool-row.result{background:#0b1a0b;border:1px solid #1a3a1a;color:#86efac;}
+    .tool-icon{font-size:.9rem;flex-shrink:0;margin-top:1px;}
+    .tool-body{flex:1;min-width:0;overflow-wrap:anywhere;}
+    .tool-label{font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;
+                opacity:.6;margin-bottom:3px;}
+
+    /* intercept banner */
+    .banner{margin:0 16px;padding:12px 16px;border-radius:10px;font-size:.85rem;
+            display:flex;align-items:flex-start;gap:10px;}
+    .banner.blocked{background:#2d0808;border:2px solid var(--red);}
+    .banner.intercepted{background:#2d1a08;border:2px solid var(--amber);}
+    .banner-icon{font-size:1.2rem;flex-shrink:0;}
+    .banner-body strong{display:block;margin-bottom:3px;}
+    .banner-body small{color:var(--muted);font-size:.75rem;line-height:1.4;}
+
+    /* input */
+    .input-row{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;}
+    textarea{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:8px;
+             color:var(--text);padding:9px 12px;font-size:.875rem;font-family:inherit;
+             resize:none;outline:none;max-height:120px;min-height:40px;line-height:1.5;}
+    textarea:focus{border-color:var(--accent);}
+    button.send{padding:9px 18px;border-radius:8px;border:none;background:var(--accent);
+                color:#fff;font-weight:600;cursor:pointer;font-size:.875rem;flex-shrink:0;
+                transition:opacity .15s;}
+    button.send:disabled{opacity:.4;cursor:not-allowed;}
+
+    /* ── Right: decision log ── */
+    .log-panel{width:380px;display:flex;flex-direction:column;flex-shrink:0;}
+    .log-header{padding:12px 16px;border-bottom:1px solid var(--border);
+                font-size:.8rem;font-weight:600;display:flex;align-items:center;justify-content:space-between;}
+    .log-entries{flex:1;overflow-y:auto;padding:10px;}
+    .log-empty{display:flex;align-items:center;justify-content:center;height:100%;
+               color:var(--muted);font-size:.8rem;text-align:center;padding:20px;}
+
+    .dc{border-radius:8px;border:1px solid var(--border);background:var(--surface);
+        margin-bottom:8px;overflow:hidden;}
+    .dc-head{padding:7px 12px;display:flex;align-items:center;justify-content:space-between;
+             border-bottom:1px solid var(--border);}
+    .dc-phase{font-size:.68rem;color:var(--muted);}
+    .dc-body{padding:7px 12px;font-family:monospace;font-size:.7rem;color:var(--muted);
+             white-space:pre-wrap;}
+    .ab{padding:2px 9px;border-radius:10px;font-size:.68rem;font-weight:700;}
+    .ab-allow{background:#14532d;color:#86efac;}
+    .ab-block{background:#450a0a;color:#fca5a5;}
+    .ab-routehardened, .ab-hold{background:#422006;color:#fcd34d;}
+    .ab-striptools{background:#431407;color:#fdba74;}
+
+    .stat-bar{display:flex;gap:0;border-top:1px solid var(--border);flex-shrink:0;}
+    .stat-cell{flex:1;padding:8px 0;text-align:center;font-size:.72rem;border-right:1px solid var(--border);}
+    .stat-cell:last-child{border-right:none;}
+    .stat-num{font-size:1rem;font-weight:700;display:block;}
+    .stat-lbl{color:var(--muted);font-size:.65rem;}
+
+    /* classifier badge */
+    .clf-badge{display:inline-flex;align-items:center;gap:4px;font-size:.68rem;
+               padding:1px 7px;border-radius:10px;margin-top:3px;}
+    .clf-injection{background:#450a0a;color:#fca5a5;}
+    .clf-benign{background:#14532d;color:#86efac;}
+
+    /* email sent card */
+    .email-card{margin-left:38px;padding:9px 12px;border-radius:8px;border:1px solid #14532d;
+                background:#0b1a0b;font-size:.78rem;display:flex;gap:8px;align-items:flex-start;}
+    .email-card-icon{font-size:1rem;flex-shrink:0;}
+    .email-card-body{min-width:0;}
+    .email-card-to{font-weight:600;color:#86efac;}
+    .email-card-subj{color:var(--muted);font-size:.72rem;margin-top:2px;}
+
+    /* outbox tray */
+    .outbox-tray{border-top:1px solid var(--border);flex-shrink:0;max-height:160px;
+                 display:flex;flex-direction:column;}
+    .outbox-head{padding:7px 16px;font-size:.75rem;font-weight:600;color:var(--muted);
+                 display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);}
+    .outbox-head span{color:#86efac;}
+    .outbox-list{overflow-y:auto;padding:6px 10px;display:flex;flex-direction:column;gap:4px;}
+    .outbox-item{padding:5px 8px;border-radius:6px;background:var(--surface2);font-size:.72rem;}
+    .outbox-item-to{color:#86efac;font-weight:600;}
+    .outbox-item-subj{color:var(--muted);}
+    .outbox-empty{padding:10px 16px;font-size:.72rem;color:var(--muted);}
+
+    /* scrollbar */
+    ::-webkit-scrollbar{width:5px;}
+    ::-webkit-scrollbar-track{background:transparent;}
+    ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>SecureLiteLLM</h1>
+  <span class="pill pill-indigo">Browsing Agent</span>
+  <span class="pill pill-green" id="classifier-pill">DeBERTa classifier</span>
+  <div class="spacer"></div>
+  <div class="header-status"><div class="dot"></div>session/L3</div>
+</header>
+
+<div class="main">
+
+  <!-- CHAT -->
+  <div class="chat-panel">
+    <div class="quick-tasks">
+      <span style="font-size:.72rem;color:var(--muted);align-self:center;margin-right:4px;">Start with:</span>
+      <button class="qt" onclick="fillInput('Go to https://news.ycombinator.com and summarise the top 3 headlines')">Browse web</button>
+      <button class="qt" onclick="fillInput('Read the quarterly_report.txt file and give me a summary')">Read report</button>
+      <button class="qt attack" onclick="fillInput('Go to http://localhost:8004/attack_page.md and summarise it')">⚠ Fetch attack page</button>
+    </div>
+
+    <div class="messages" id="messages">
+      <div style="margin:auto;text-align:center;color:var(--muted);font-size:.85rem;padding:40px 20px;">
+        <div style="font-size:2rem;margin-bottom:12px;">🤖</div>
+        <strong style="color:var(--text);">SecureLiteLLM Browsing Agent</strong><br>
+        I can browse URLs, read company files, and send emails — just ask naturally.<br><br>
+        <span style="color:#86efac;font-size:.78rem;">
+          Benign flow: "Read the quarterly report" → then "Email it to <strong>team@mycompany.com</strong>" → <strong>allowed</strong>
+        </span><br><br>
+        <span style="color:#f87171;font-size:.78rem;">
+          Attack flow: "Fetch the attack page" → then "Email that to <strong>external@gmail.com</strong>" → <strong>blocked</strong> — session is tainted
+        </span>
+      </div>
+    </div>
+
+    <div class="input-row">
+      <textarea id="input" placeholder="Ask the agent to browse a URL…" rows="1"
+        onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+      <button class="send" id="send-btn" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+
+  <!-- DECISION LOG -->
+  <div class="log-panel">
+    <div class="log-header">
+      <span>Decision Log</span>
+      <span id="decision-count" style="color:var(--muted);font-size:.72rem;">0 decisions</span>
+    </div>
+    <div class="log-entries" id="log-entries">
+      <div class="log-empty">SecureLiteLLM decisions appear here in real time.</div>
+    </div>
+    <div class="stat-bar">
+      <div class="stat-cell"><span class="stat-num" id="s-allow">0</span><span class="stat-lbl">Allow</span></div>
+      <div class="stat-cell"><span class="stat-num" id="s-harden" style="color:var(--amber)">0</span><span class="stat-lbl">Hardened</span></div>
+      <div class="stat-cell"><span class="stat-num" id="s-strip" style="color:var(--amber)">0</span><span class="stat-lbl">Strip</span></div>
+      <div class="stat-cell"><span class="stat-num" id="s-block" style="color:var(--red)">0</span><span class="stat-lbl">Block</span></div>
+    </div>
+    <div class="outbox-tray" id="outbox-tray" style="display:none">
+      <div class="outbox-head">Outbox <span id="outbox-count">0 sent</span></div>
+      <div class="outbox-list" id="outbox-list"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // Session state
+  const SESSION_ID = 'demo-' + Math.random().toString(36).slice(2, 10);
+  let running = false;
+  let stats = {allow:0, harden:0, strip:0, block:0};
+  let decisionCount = 0;
+  let outboxCount = 0;
+
+  // ── Input helpers ──
+  function fillInput(text) {
+    const el = document.getElementById('input');
+    el.value = text;
+    autoResize(el);
+    el.focus();
+  }
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  }
+
+  // ── Messages ──
+  function getMessages() { return document.getElementById('messages'); }
+
+  function clearWelcome() {
+    const m = getMessages();
+    const welcome = m.querySelector('div[style*="margin:auto"]');
+    if (welcome) welcome.remove();
+  }
+
+  function appendUserMsg(text) {
+    clearWelcome();
+    const m = getMessages();
+    const div = document.createElement('div');
+    div.className = 'msg user';
+    div.innerHTML = `
+      <div class="avatar av-user">U</div>
+      <div class="bubble">${esc(text)}</div>`;
+    m.appendChild(div);
+    scrollChat();
+  }
+
+  function appendAgentMsg(text) {
+    const m = getMessages();
+    const div = document.createElement('div');
+    div.className = 'msg agent';
+    div.innerHTML = `
+      <div class="avatar av-agent">🤖</div>
+      <div class="bubble">${esc(text).replace(/\n/g,'<br>')}</div>`;
+    m.appendChild(div);
+    scrollChat();
+  }
+
+  function appendToolCall(name, args) {
+    const m = getMessages();
+    const preview = Object.entries(args).map(([k,v])=>`${k}=${JSON.stringify(v).slice(0,80)}`).join(' ');
+    const div = document.createElement('div');
+    div.className = 'tool-row call';
+    div.innerHTML = `<span class="tool-icon">🔧</span>
+      <div class="tool-body"><div class="tool-label">Tool call</div>${esc(name)}(${esc(preview)})</div>`;
+    m.appendChild(div);
+    scrollChat();
+  }
+
+  function appendToolResult(name, result) {
+    const m = getMessages();
+    let preview = '';
+    try {
+      if (typeof result === 'object') {
+        const content = result.content || result.result || JSON.stringify(result);
+        preview = String(content).slice(0, 300);
+        if (String(content).length > 300) preview += '…';
+      } else {
+        preview = String(result).slice(0, 300);
+      }
+    } catch { preview = JSON.stringify(result).slice(0, 300); }
+    const div = document.createElement('div');
+    div.className = 'tool-row result';
+    div.innerHTML = `<span class="tool-icon">📄</span>
+      <div class="tool-body"><div class="tool-label">Result — ${esc(name)}</div>${esc(preview)}</div>`;
+    m.appendChild(div);
+    scrollChat();
+  }
+
+  function appendBanner(type, title, detail) {
+    const m = getMessages();
+    const div = document.createElement('div');
+    div.className = `banner ${type}`;
+    const icon = type === 'blocked' ? '🚫' : '⚠️';
+    div.innerHTML = `<span class="banner-icon">${icon}</span>
+      <div class="banner-body"><strong>${title}</strong><small>${esc(detail)}</small></div>`;
+    m.appendChild(div);
+    scrollChat();
+  }
+
+  function appendEmailCard(args, result) {
+    const m = getMessages();
+    const to = args.to || '';
+    const subject = args.subject || '(no subject)';
+    const allowed = result && result.status === 'sent';
+    const div = document.createElement('div');
+    div.className = 'email-card';
+    div.innerHTML = `<span class="email-card-icon">${allowed ? '✉️' : '🚫'}</span>
+      <div class="email-card-body">
+        <div class="email-card-to">${allowed ? 'Email sent to ' : 'Email blocked — '}${esc(to)}</div>
+        <div class="email-card-subj">Subject: ${esc(subject)}</div>
+      </div>`;
+    m.appendChild(div);
+    scrollChat();
+    if (allowed) addOutboxEntry(to, subject);
+  }
+
+  function addOutboxEntry(to, subject) {
+    const tray = document.getElementById('outbox-tray');
+    const list = document.getElementById('outbox-list');
+    tray.style.display = 'flex';
+    outboxCount++;
+    document.getElementById('outbox-count').textContent = outboxCount + ' sent';
+    const item = document.createElement('div');
+    item.className = 'outbox-item';
+    item.innerHTML = `<div class="outbox-item-to">To: ${esc(to)}</div>
+      <div class="outbox-item-subj">${esc(subject)}</div>`;
+    list.appendChild(item);
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function scrollChat() {
+    const m = getMessages();
+    m.scrollTop = m.scrollHeight;
+  }
+
+  // ── Decision log ──
+  function addDecision(rec) {
+    const log = document.getElementById('log-entries');
+    const empty = log.querySelector('.log-empty');
+    if (empty) empty.remove();
+
+    const action = rec.action || 'allow';
+    const phase = rec.phase || '';
+    const f = rec.features || {};
+    const risk = (rec.risk_score || 0).toFixed(3);
+    const rules = (rec.matched_rules || []).join(', ') || '—';
+    const verdicts = f.classifier_verdicts || [];
+
+    const cls = action.replace(/-/g,'');
+    const card = document.createElement('div');
+    card.className = 'dc';
+
+    let clfHtml = '';
+    verdicts.forEach(v => {
+      const cls2 = v.label === 'INJECTION' ? 'clf-injection' : 'clf-benign';
+      clfHtml += `<span class="clf-badge ${cls2}">${v.label} ${(v.score*100).toFixed(0)}%</span>`;
+    });
+
+    card.innerHTML = `
+      <div class="dc-head">
+        <span class="dc-phase">${phase}</span>
+        <span class="ab ab-${cls}">${action}</span>
+      </div>
+      <div class="dc-body">risk=${risk}  rules=[${rules}]
+untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink_args !== undefined ? `\ntainted_hash=${f.tainted_spans_in_sink_args}` : ''}${clfHtml ? `\n${clfHtml}` : ''}</div>`;
+    log.prepend(card);
+
+    decisionCount++;
+    document.getElementById('decision-count').textContent = decisionCount + ' decision' + (decisionCount !== 1 ? 's' : '');
+
+    if (action === 'block') stats.block++;
+    else if (action === 'strip-tools') stats.strip++;
+    else if (action === 'route-hardened' || action === 'hold') stats.harden++;
+    else stats.allow++;
+    document.getElementById('s-allow').textContent = stats.allow;
+    document.getElementById('s-harden').textContent = stats.harden;
+    document.getElementById('s-strip').textContent = stats.strip;
+    document.getElementById('s-block').textContent = stats.block;
+  }
+
+  // ── Send ──
+  async function sendMessage() {
+    if (running) return;
+    const input = document.getElementById('input');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    running = true;
+    input.value = '';
+    input.style.height = 'auto';
+    document.getElementById('send-btn').disabled = true;
+
+    appendUserMsg(msg);
+
+    const resp = await fetch('/chat', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({message: msg, session_id: SESSION_ID}),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        handleEvent(ev);
+      }
+    }
+
+    running = false;
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+  }
+
+  const _pendingArgs = {};
+
+  function handleEvent(ev) {
+    switch (ev.kind) {
+      case 'assistant_tool_calls':
+        break; // individual calls follow
+      case 'tool_call':
+        _pendingArgs[ev.call_id] = {name: ev.name, args: ev.args || {}};
+        appendToolCall(ev.name, ev.args || {});
+        break;
+      case 'tool_result': {
+        const pending = _pendingArgs[ev.call_id] || {};
+        if (ev.name === 'send_email') {
+          appendEmailCard(pending.args || {}, ev.result);
+        } else {
+          appendToolResult(ev.name, ev.result);
+        }
+        break;
+      }
+      case 'assistant_message':
+        appendAgentMsg(ev.content);
+        break;
+      case 'blocked':
+        appendBanner('blocked', '🚫 Blocked by SecureLiteLLM', ev.message || '');
+        break;
+      case 'intercepted':
+        appendBanner('intercepted', '⚠️ Tool calls intercepted — ' + ev.action, ev.message || '');
+        break;
+      case 'error':
+        appendBanner('blocked', 'Error', ev.message || 'Unknown error');
+        break;
+      case 'decision':
+        addDecision(ev.record);
+        break;
+    }
+  }
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>
