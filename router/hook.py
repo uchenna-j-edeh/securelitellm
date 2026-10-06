@@ -298,7 +298,7 @@ async def _classify_sources(
     """Run safe_classify on each source's content concurrently."""
 
     async def _one(src: dict) -> dict:
-        content = src.get("content_preview", "") or ""
+        content = src.get("content_for_classifier", "") or ""
         result = await classifier.safe_classify(content)
         verdict = classifier.to_verdict(result)
         verdict["source_id"] = src.get("tool_call_id")
