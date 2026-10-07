@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Risk-based LLM router with session taint tracking — capstone evaluation instrument"
 requires-python = ">=3.11"
 dependencies = [
-    "litellm>=1.40.0,<2.0.0",
+    "litellm[proxy]>=1.40.0,<2.0.0",
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.7.0",
@@ -35,5 +35,5 @@ ignore = ["E501"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
-    "e2e: end-to-end tests that require the Docker Compose stack to be running",
+    "e2e: end-to-end tests that require a live Docker or native Windows stack",
 ]

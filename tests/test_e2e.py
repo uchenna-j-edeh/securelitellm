@@ -1,4 +1,4 @@
-"""End-to-end tests — run against the live Docker Compose stack.
+"""End-to-end tests — run against a live Docker or native Windows stack.
 
 Requires the stack to be up:
     cd deploy && docker compose up -d
@@ -9,12 +9,15 @@ Mark: pytest -m e2e
 Environment:
     E2E_BASE_URL     LiteLLM proxy URL (default: http://localhost:4000)
     E2E_MASTER_KEY   LiteLLM master key (default: sk-test-e2e-key)
+    E2E_DECISION_LOG Read decision records from this local JSONL file instead
+                     of Docker logs.
 """
 
 import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 import requests
@@ -22,6 +25,7 @@ import requests
 _BASE = os.environ.get("E2E_BASE_URL", "http://localhost:4000")
 _KEY = os.environ.get("E2E_MASTER_KEY", "sk-test-e2e-key")
 _CONTAINER = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
+_DECISION_LOG = os.environ.get("E2E_DECISION_LOG")
 _HEADERS = {"Authorization": f"Bearer {_KEY}", "Content-Type": "application/json"}
 _TIMEOUT = 10
 
@@ -42,13 +46,17 @@ def _chat(
 
 
 def _last_decision_records(n: int = 5) -> list[dict]:
-    """Pull the last n JSONL decision records from the litellm container logs."""
-    result = subprocess.run(
-        ["docker", "logs", "--tail", "200", _CONTAINER],
-        capture_output=True,
-        text=True,
-    )
-    output = result.stdout + result.stderr
+    """Read recent JSONL decision records from a local file or Docker logs."""
+    if _DECISION_LOG:
+        path = Path(_DECISION_LOG)
+        output = path.read_text(encoding="utf-8") if path.exists() else ""
+    else:
+        result = subprocess.run(
+            ["docker", "logs", "--tail", "200", _CONTAINER],
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout + result.stderr
     records = []
     for line in output.splitlines():
         line = line.strip()

@@ -182,7 +182,7 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
         writer.writeheader()
 
         for mode, level in CONFIGS:
-            print(f"[{mode}/{level}] starting …", flush=True)
+            print(f"[{mode}/{level}] starting ...", flush=True)
 
             if not dry_run:
                 clear_log()  # clear BEFORE container starts so it opens from byte 0
@@ -203,7 +203,7 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
                             writer.writerow(_row(mode, level, tr))
                         fh.flush()
                         actions = [tr.action for tr in results]
-                        print(f"{label} → {actions}")
+                        print(f"{label} -> {actions}")
                     except Exception as exc:
                         print(f"{label} ERROR: {exc}", file=sys.stderr)
 
