@@ -1,7 +1,5 @@
 """Tests for the session store (issue #15)."""
 
-import time
-
 from router.session import SessionStore
 
 
@@ -68,7 +66,8 @@ def test_expire_removes_session():
 def test_expired_ttl_returns_fresh_session():
     store = SessionStore(ttl_seconds=0)  # instant TTL
     store.record_source("run-1", {"tool_call_id": "c1", "content": "x"})
-    time.sleep(0.01)
+    # Avoid relying on the host clock resolution (15.625 ms on some Windows systems).
+    store._store["run-1"].created_at -= 1
     s = store.state("run-1")
     assert s.tainted is False  # evicted and recreated
 

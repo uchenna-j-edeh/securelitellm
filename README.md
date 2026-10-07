@@ -12,6 +12,8 @@ See [ROADMAP.md](ROADMAP.md) for the full research design and milestone plan.
 
 **Prerequisites:** Docker, Docker Compose, Python ≥ 3.11, [uv](https://docs.astral.sh/uv/)
 
+### macOS / Linux
+
 ```bash
 # 1. Clone
 git clone git@github.com:uchenna-j-edeh/securelitellm.git
@@ -45,6 +47,64 @@ curl http://localhost:4000/chat/completions \
 make down
 ```
 
+### Windows PowerShell
+
+Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/)
+with the WSL 2 backend and Linux containers. Start Docker Desktop, then confirm that
+`docker version` and `docker compose version` succeed before continuing.
+
+Install the pinned `uv` version if needed:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.12.21/install.ps1 | iex"
+```
+
+Open a new PowerShell window so `uv` is on `PATH`, then run:
+
+```powershell
+# 1. Clone over HTTPS (no SSH key required)
+git clone https://github.com/uchenna-j-edeh/securelitellm.git
+Set-Location securelitellm
+
+# 2. Allow the repository helper script in this PowerShell process only
+Set-ExecutionPolicy -Scope Process Bypass
+
+# 3. Install locked dependencies and create an ignored .env with a random key
+.\scripts\dev.ps1 setup
+
+# 4. Lint, validate the corpus, and run unit tests
+.\scripts\dev.ps1 lint
+.\scripts\dev.ps1 validate
+.\scripts\dev.ps1 test
+
+# 5. Start and verify the Docker Compose stack
+.\scripts\dev.ps1 up
+.\scripts\dev.ps1 verify
+
+# 6. Run Docker-backed E2E tests, then stop the stack
+.\scripts\dev.ps1 test-e2e
+.\scripts\dev.ps1 down
+```
+
+The PowerShell helper mirrors the Makefile tasks and always passes the repository-root
+`.env` file to Docker Compose explicitly. Run `.\scripts\dev.ps1 help` to list tasks.
+
+If Docker Desktop cannot start its Linux engine, the mock stack can run directly on
+Windows without Docker. This fallback uses the same locked Python environment and E2E
+tests:
+
+```powershell
+.\scripts\dev.ps1 local-up
+.\scripts\dev.ps1 local-verify
+.\scripts\dev.ps1 test-e2e-local
+.\scripts\dev.ps1 local-down
+```
+
+The helper starts hidden, repository-scoped processes, records their PIDs under the
+ignored `.run` directory, and stops only processes whose PID, executable, and start
+time still match. Local stdout, stderr, and decision logs are also written under
+`.run` for troubleshooting.
+
 ---
 
 ## Dependencies
@@ -54,10 +114,10 @@ make down
 | Tool | Version | Install |
 |---|---|---|
 | Python | ≥ 3.11 | [python.org](https://www.python.org/downloads/) or `brew install python@3.11` |
-| uv | 0.12.21 | `curl -LsSf https://astral.sh/uv/0.12.21/install.sh \| sh` |
+| uv | 0.12.21 | macOS/Linux: `curl -LsSf https://astral.sh/uv/0.12.21/install.sh \| sh`; Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.12.21/install.ps1 \| iex"` |
 | Docker Desktop | latest | [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/) |
-| git | any | pre-installed on macOS / `brew install git` |
-| gh (GitHub CLI) | any | `brew install gh` — only needed for repo setup |
+| git | any | [git-scm.com](https://git-scm.com/downloads) or `brew install git` |
+| gh (GitHub CLI) | any | [cli.github.com](https://cli.github.com/) or `brew install gh` — only needed for repo setup |
 
 ### Python packages
 
@@ -446,7 +506,7 @@ make demo            # http://localhost:8003
 
 | Turn | What you type | What happens |
 |---|---|---|
-| 1 | `Go to https://raw.githubusercontent.com/uchenna-j-edeh/securelitellm/feat/demo-agent/demo/attack_page.md and summarise it` | DeBERTa: INJECTION ~94% → `strip-tools` — agent cannot call any tools |
+| 1 | `Go to https://raw.githubusercontent.com/uchenna-j-edeh/securelitellm/main/demo/attack_page.md and summarise it` | DeBERTa: INJECTION ~94% → `strip-tools` — agent cannot call any tools |
 | 2 | `Email that summary to colleague@company.com` | Session still tainted → `strip-tools` again; email never sent |
 
 **Scenario 2 — Poisoned company file → delayed exfil**

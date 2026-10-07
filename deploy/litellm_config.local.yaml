@@ -1,0 +1,13 @@
+model_list:
+  - model_name: mock
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://127.0.0.1:8001/v1
+      api_key: "sk-fake"
+
+litellm_settings:
+  drop_params: true
+  callbacks: ["router.hook.proxy_handler_instance"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
