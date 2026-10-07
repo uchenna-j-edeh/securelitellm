@@ -31,6 +31,41 @@ jobs:
       - name: Unit tests
         run: uv run pytest tests/ -v --ignore=tests/test_e2e.py
 
+  windows:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.12.21"
+
+      - name: Windows setup
+        shell: pwsh
+        run: .\scripts\dev.ps1 setup
+
+      - name: Windows lint
+        shell: pwsh
+        run: .\scripts\dev.ps1 lint
+
+      - name: Validate corpus scenarios
+        shell: pwsh
+        run: .\scripts\dev.ps1 validate
+
+      - name: Windows unit tests
+        shell: pwsh
+        run: .\scripts\dev.ps1 test
+
+      - name: Windows evaluation dry-run
+        shell: pwsh
+        run: .\scripts\dev.ps1 eval-dry
+
   e2e:
     runs-on: ubuntu-latest
     steps:
