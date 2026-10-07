@@ -446,7 +446,7 @@ make demo            # http://localhost:8003
 
 | Turn | What you type | What happens |
 |---|---|---|
-| 1 | `Go to https://raw.githubusercontent.com/uchenna-j-edeh/securelitellm/feat/demo-agent/demo/attack_page.md and summarise it` | DeBERTa: INJECTION ~94% → `strip-tools` — agent cannot call any tools |
+| 1 | `Go to https://raw.githubusercontent.com/uchenna-j-edeh/securelitellm/main/demo/attack_page.md and summarise it` | DeBERTa: INJECTION ~94% → `strip-tools` — agent cannot call any tools |
 | 2 | `Email that summary to colleague@company.com` | Session still tainted → `strip-tools` again; email never sent |
 
 **Scenario 2 — Poisoned company file → delayed exfil**
