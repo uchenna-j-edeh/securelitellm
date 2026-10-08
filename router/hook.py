@@ -190,7 +190,9 @@ class RouterHook(CustomLogger):
         if action == "strip-tools":
             data = dict(data)
             data.pop("tools", None)
-            data.pop("tool_choice", None)
+            # Explicitly forbid tool use so the model produces a text response
+            # instead of generating a tool call that the API will reject.
+            data["tool_choice"] = "none"
 
         if action == "route-hardened":
             data = dict(data)

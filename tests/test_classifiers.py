@@ -49,7 +49,9 @@ class TestBaseClassifier:
 
     def test_to_verdict_error_model(self):
         clf = _FakeClassifier()
-        error_result = ClassifierResult(label="INJECTION", score=1.0, latency_ms=0.0, model="error:RuntimeError")
+        error_result = ClassifierResult(
+            label="INJECTION", score=1.0, latency_ms=0.0, model="error:RuntimeError"
+        )
         v = clf.to_verdict(error_result)
         assert v["label"] == "INJECTION"
         assert v["score"] == 1.0
