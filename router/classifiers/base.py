@@ -14,21 +14,26 @@ class ClassifierResult:
 
 
 class BaseClassifier(ABC):
-    """Async, fail-open classifier adapter."""
+    """Async, fail-closed classifier adapter. Classifier is mandatory."""
 
     @abstractmethod
     async def classify(self, text: str) -> ClassifierResult: ...
 
-    async def safe_classify(self, text: str) -> ClassifierResult | None:
-        """Classify and return None on any error (fail-open)."""
+    async def safe_classify(self, text: str) -> ClassifierResult:
+        """Classify and fail closed on any error — returns INJECTION on exception."""
         try:
             return await self.classify(text)
-        except Exception:
-            return None
+        except Exception as exc:
+            return ClassifierResult(
+                label="INJECTION",
+                score=1.0,
+                latency_ms=0.0,
+                model=f"error:{type(exc).__name__}",
+            )
 
-    def to_verdict(self, result: ClassifierResult | None) -> dict:
-        if result is None:
-            return {"label": "UNKNOWN", "score": None, "model": "error", "cached": False}
+    def to_verdict(self, result: ClassifierResult) -> dict:
+        if result.model.startswith("error:"):
+            return {"label": "INJECTION", "score": 1.0, "model": result.model, "cached": False}
         return {
             "label": result.label,
             "score": round(result.score, 6),

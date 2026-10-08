@@ -17,7 +17,7 @@ import httpx
 from demo.tools import TOOL_FN_MAP, TOOL_SCHEMAS
 
 PROXY_URL = os.environ.get("PROXY_URL", "http://localhost:4000")
-MODEL = os.environ.get("DEMO_MODEL", "groq")
+MODEL = os.environ.get("DEMO_MODEL", "llama")
 MAX_TURNS = 8
 
 SYSTEM_PROMPT = """You are a helpful enterprise assistant. You have tools to browse URLs, read company files, send emails, and make HTTP requests.
