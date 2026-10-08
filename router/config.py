@@ -6,11 +6,11 @@ from typing import Literal
 
 Mode = Literal["stateless", "session"]
 Level = Literal["L0", "L1", "L2", "L3"]
-ClassifierBackend = Literal["local", "promptguard", "llmguard", "none"]
+ClassifierBackend = Literal["local", "promptguard", "llmguard", "mock", "none"]
 
 _VALID_MODES = ("stateless", "session")
 _VALID_LEVELS = ("L0", "L1", "L2", "L3")
-_VALID_BACKENDS = ("local", "promptguard", "llmguard", "none")
+_VALID_BACKENDS = ("local", "promptguard", "llmguard", "mock", "none")
 
 
 @dataclass
