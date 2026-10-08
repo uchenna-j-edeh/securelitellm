@@ -10,6 +10,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from router.classifiers.base import BaseClassifier, ClassifierResult
+
+
+class _FakeInjectionClassifier(BaseClassifier):
+    """Fake classifier that always returns INJECTION — matches old no-classifier taint-all behavior."""
+
+    async def classify(self, text: str) -> ClassifierResult:
+        return ClassifierResult(label="INJECTION", score=0.99, latency_ms=1.0, model="fake")
+
 
 @pytest.fixture()
 def hook_session(log_path, monkeypatch):
@@ -24,7 +33,9 @@ def hook_session(log_path, monkeypatch):
     monkeypatch.setattr(sess_mod, "_store", SessionStore())
     from router.hook import RouterHook
 
-    return RouterHook()
+    hook = RouterHook()
+    hook._classifier = _FakeInjectionClassifier()
+    return hook
 
 
 @pytest.fixture()
@@ -35,7 +46,9 @@ def hook_stateless(log_path, monkeypatch):
     monkeypatch.setenv("ROUTER_ENFORCE", "false")
     from router.hook import RouterHook
 
-    return RouterHook()
+    hook = RouterHook()
+    hook._classifier = _FakeInjectionClassifier()
+    return hook
 
 
 @pytest.fixture()
@@ -50,7 +63,9 @@ def hook_l1(log_path, monkeypatch):
     monkeypatch.setattr(sess_mod, "_store", SessionStore())
     from router.hook import RouterHook
 
-    return RouterHook()
+    hook = RouterHook()
+    hook._classifier = _FakeInjectionClassifier()
+    return hook
 
 
 @pytest.fixture()
@@ -59,14 +74,15 @@ def hook_enforcing(log_path, monkeypatch):
     monkeypatch.setenv("ROUTER_LEVEL", "L3")
     monkeypatch.setenv("ROUTER_LOG_PATH", log_path)
     monkeypatch.setenv("ROUTER_ENFORCE", "true")
-    monkeypatch.setenv("CLASSIFIER_BACKEND", "none")
     import router.session as sess_mod
     from router.session import SessionStore
 
     monkeypatch.setattr(sess_mod, "_store", SessionStore())
     from router.hook import RouterHook
 
-    return RouterHook()
+    hook = RouterHook()
+    hook._classifier = _FakeInjectionClassifier()
+    return hook
 
 
 async def pre_call(hook, data):

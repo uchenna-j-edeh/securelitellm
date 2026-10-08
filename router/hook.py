@@ -103,9 +103,22 @@ class RouterHook(CustomLogger):
         sources = classify_sources(messages)
         classifier_verdicts: list[dict] = []
 
-        # L2/L3: run classifier BEFORE recording sources so the taint decision
-        # can use the verdict — clean content should not poison the session.
-        if self.config.level in ("L2", "L3") and self._classifier is not None:
+        # Classifier is mandatory whenever tool results are present.
+        # No valid production path bypasses classification.
+        if sources and self._classifier is None:
+            import litellm.exceptions as _le
+
+            raise _le.BadRequestError(
+                message=(
+                    "SecureLiteLLM: classifier is required but not configured. "
+                    "Set CLASSIFIER_BACKEND and ensure the classifier sidecar is reachable."
+                ),
+                model=data.get("model", ""),
+                llm_provider="",
+            )
+
+        # Run classifier on ALL levels (not only L2/L3) when sources are present.
+        if sources and self._classifier is not None:
             classifier_verdicts = await _classify_sources(self._classifier, sources)
             features["classifier_verdicts"] = classifier_verdicts
             features["classifier_injection"] = any(
@@ -212,7 +225,7 @@ class RouterHook(CustomLogger):
         features["streaming_tool_request"] = False
 
         sources = classify_sources(messages)
-        if self.config.level in ("L2", "L3") and self._classifier is not None:
+        if sources and self._classifier is not None:
             verdicts = await _classify_sources(self._classifier, sources)
             features["classifier_verdicts"] = verdicts
             features["classifier_injection"] = any(
