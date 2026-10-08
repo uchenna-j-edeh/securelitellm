@@ -47,12 +47,14 @@ class TestBaseClassifier:
         assert v["cached"] is False
         assert "latency_ms" in v
 
-    def test_to_verdict_none(self):
+    def test_to_verdict_error_model(self):
         clf = _FakeClassifier()
-        v = clf.to_verdict(None)
-        assert v["label"] == "UNKNOWN"
-        assert v["score"] is None
-        assert v["model"] == "error"
+        error_result = ClassifierResult(
+            label="INJECTION", score=1.0, latency_ms=0.0, model="error:RuntimeError"
+        )
+        v = clf.to_verdict(error_result)
+        assert v["label"] == "INJECTION"
+        assert v["score"] == 1.0
 
     def test_safe_classify_returns_result(self):
         clf = _FakeClassifier(score=0.001, label="BENIGN")
@@ -60,14 +62,17 @@ class TestBaseClassifier:
         assert result is not None
         assert result.label == "BENIGN"
 
-    def test_safe_classify_fail_open(self):
+    def test_safe_classify_fail_closed(self):
         class _BrokenClassifier(BaseClassifier):
             async def classify(self, text: str) -> ClassifierResult:
                 raise RuntimeError("network error")
 
         clf = _BrokenClassifier()
         result = asyncio.run(clf.safe_classify("hello"))
-        assert result is None
+        assert result is not None
+        assert result.label == "INJECTION"
+        assert result.score == 1.0
+        assert "RuntimeError" in result.model
 
 
 # ---------------------------------------------------------------------------

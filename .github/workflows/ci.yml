@@ -83,6 +83,8 @@ jobs:
         env:
           LITELLM_MASTER_KEY: sk-test-ci-e2e-key
           GROQ_API_KEY: ""
+          CLASSIFIER_BACKEND: mock
+          ROUTER_MODE: stateless
         run: docker compose up -d
 
       - name: Wait for healthy
@@ -117,4 +119,5 @@ jobs:
         env:
           LITELLM_MASTER_KEY: sk-test-ci-e2e-key
           GROQ_API_KEY: ""
+          CLASSIFIER_BACKEND: mock
         run: docker compose down

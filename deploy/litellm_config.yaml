@@ -11,6 +11,12 @@ model_list:
       model: groq/qwen/qwen3.8-27b
       api_key: os.environ/GROQ_API_KEY
 
+  # OSS 120B — large open-source model, less restricted than Qwen
+  - model_name: llama
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+
   # Alias "llm" → groq so existing tests keep working
   - model_name: llm
     litellm_params:

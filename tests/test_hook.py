@@ -108,6 +108,14 @@ async def test_multiple_requests_append_records(hook, log_path, base_data):
 
 @pytest.mark.asyncio
 async def test_tool_context_captured(hook, log_path):
+    from router.classifiers.base import BaseClassifier, ClassifierResult
+
+    class _FakeClassifier(BaseClassifier):
+        async def classify(self, text: str) -> ClassifierResult:
+            return ClassifierResult(label="BENIGN", score=0.01, latency_ms=1.0, model="fake")
+
+    hook._classifier = _FakeClassifier()
+
     data = {
         "litellm_call_id": "tool-req",
         "messages": [

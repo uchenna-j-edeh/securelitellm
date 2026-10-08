@@ -4,7 +4,8 @@ CLASSIFIER_BACKEND env var selects the backend:
   local        — self-hosted sidecar (deploy/classifier/) — recommended for prod
   promptguard  — PromptGuard 2 via Groq API (needs GROQ_API_KEY)
   llmguard     — local LLM Guard (requires pip install llm-guard)
-  none         — no classification; taint-hash detection still active at L3
+  mock         — stub that returns BENIGN (CI / unit tests only)
+  none         — disabled; C10b will block any request with tool results
 
 Swap backends by changing CLASSIFIER_BACKEND — no code changes needed.
 """
@@ -45,6 +46,11 @@ def get_classifier() -> BaseClassifier | None:
         max_size = int(os.environ.get(_CACHE_SIZE_ENV, _DEFAULT_CACHE_SIZE))
         return CachedClassifier(LocalClassifier(), max_size=max_size)
 
+    if backend == "mock":
+        from router.classifiers.mock import MockClassifier
+
+        return MockClassifier()
+
     raise ValueError(
-        f"Unknown CLASSIFIER_BACKEND={backend!r}. Valid values: local, promptguard, llmguard, none"
+        f"Unknown CLASSIFIER_BACKEND={backend!r}. Valid values: local, promptguard, llmguard, mock, none"
     )
