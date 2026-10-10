@@ -39,7 +39,7 @@ async def call_hook(hook, data):
 def _request_records(log_path: str) -> list[dict]:
     """Return only request decision records, skipping startup events."""
     lines = Path(log_path).read_text().strip().splitlines()
-    return [json.loads(l) for l in lines if json.loads(l).get("event") != "startup"]
+    return [json.loads(ln) for ln in lines if json.loads(ln).get("event") != "startup"]
 
 
 @pytest.mark.asyncio

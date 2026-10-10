@@ -97,7 +97,7 @@ def make_data(messages, session_id=None, call_id="req-1"):
 def _request_records(log_path):
     """Return only request decision records, skipping startup events."""
     lines = Path(log_path).read_text().strip().splitlines()
-    return [json.loads(l) for l in lines if json.loads(l).get("event") != "startup"]
+    return [json.loads(ln) for ln in lines if json.loads(ln).get("event") != "startup"]
 
 
 def read_record(log_path, n=0):
