@@ -94,9 +94,14 @@ def make_data(messages, session_id=None, call_id="req-1"):
     return {"litellm_call_id": call_id, "messages": messages, "metadata": {"headers": headers}}
 
 
-def read_record(log_path, n=0):
+def _request_records(log_path):
+    """Return only request decision records, skipping startup events."""
     lines = Path(log_path).read_text().strip().splitlines()
-    return json.loads(lines[n])
+    return [json.loads(l) for l in lines if json.loads(l).get("event") != "startup"]
+
+
+def read_record(log_path, n=0):
+    return _request_records(log_path)[n]
 
 
 def make_response(name="send_email", arguments="{}"):
@@ -358,7 +363,7 @@ async def test_generated_read_only_tool_is_not_held(hook_enforcing, log_path):
     )
 
     assert result is None
-    assert len(Path(log_path).read_text().strip().splitlines()) == 1
+    assert len(_request_records(log_path)) == 1
 
 
 @pytest.mark.asyncio
