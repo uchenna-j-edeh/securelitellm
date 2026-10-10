@@ -69,15 +69,15 @@ CONFIGS = [
     ("stateless", "L1"),
     ("stateless", "L2"),
     ("stateless", "L3"),
-    ("session",   "L0"),
-    ("session",   "L1"),
-    ("session",   "L2"),
-    ("session",   "L3"),
+    ("session", "L0"),
+    ("session", "L1"),
+    ("session", "L2"),
+    ("session", "L3"),
 ]
 
 HISTORY_MODES: dict[str, list[str]] = {
     "stateless": ["incremental", "full"],
-    "session":   ["incremental"],
+    "session": ["incremental"],
 }
 
 CSV_FIELDS = [
@@ -187,7 +187,9 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
     health_timeout = 300.0 if classifier_backend == "local" else 120.0
     n_history_runs = sum(len(HISTORY_MODES[m]) for m, _ in CONFIGS)
     print(f"Loaded {len(corpus)} scenarios, {n_seeds} seeds, {len(CONFIGS)} proxy configs")
-    print(f"History modes per config: stateless={HISTORY_MODES['stateless']}, session={HISTORY_MODES['session']}")
+    print(
+        f"History modes per config: stateless={HISTORY_MODES['stateless']}, session={HISTORY_MODES['session']}"
+    )
     print(f"Classifier backend: {classifier_backend}")
     print(f"Total runs: {len(corpus) * n_seeds * n_history_runs}\n")
 
@@ -214,7 +216,9 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
                             continue
 
                         try:
-                            results = replay_scenario(scenario, seed=seed, history_mode=history_mode)
+                            results = replay_scenario(
+                                scenario, seed=seed, history_mode=history_mode
+                            )
                             for tr in results:
                                 writer.writerow(_row(mode, level, history_mode, tr))
                             fh.flush()
