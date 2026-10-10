@@ -83,6 +83,7 @@ class RouterHook(CustomLogger):
         self.decision_logger = DecisionLogger(self.config.log_path)
         self._classifier: BaseClassifier | None = _init_classifier(self.config.classifier_backend)
         self._policy = PolicyEngine.from_yaml(self.config.policy_path or None)
+        self.decision_logger.emit(self.config.startup_record())
 
     async def async_pre_call_hook(
         self,
