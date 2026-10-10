@@ -380,7 +380,7 @@ deployment enable switch, see [`infra/README.md`](infra/README.md).
 
 ## Running the evaluation
 
-The evaluation replays the attack corpus across all 8 configurations (2 modes × 4 levels), writes every turn result to `eval/results/results.csv`, then computes metrics.
+The evaluation replays the attack corpus across all 8 proxy configurations (2 modes × 4 levels). Stateless configurations run twice per proxy start — once with `history_mode=incremental` (each turn sends only its own messages) and once with `history_mode=full` (all prior messages prepended), for 12 distinct run groups in total. Every turn result is written to `eval/results/results.csv` with a `history_mode` column, then metrics are computed.
 
 ### Without a classifier (structural detection only)
 
@@ -389,7 +389,7 @@ The evaluation replays the attack corpus across all 8 configurations (2 modes ×
 make eval
 ```
 
-Runs all 8 configs with `CLASSIFIER_BACKEND=none`. L0/L1 use only structural features (source/sink co-presence). L2/L3 use session taint-hash matching.
+Runs all 8 configs with `CLASSIFIER_BACKEND=none`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
 
 ### With the local DeBERTa classifier
 
