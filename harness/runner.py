@@ -1,11 +1,17 @@
 """Agent driver — replay one corpus scenario through the LiteLLM proxy.
 
-Each turn sends ONLY its own incremental messages (not cumulative history).
-The session ID is shared across turns via x-agent-run-id so the session store
-accumulates taint, but stateless routing never sees cross-turn context.
+Two history modes:
+  incremental  Each turn sends ONLY its own messages.  The session store
+               accumulates taint via x-agent-run-id, but stateless routing
+               never sees cross-turn context.  This is the baseline.
+  full         Each turn sends ALL prior turns' messages prepended to its own,
+               mirroring how a real agent maintains conversation context.
+               Stateless routing can then detect cross-turn attacks because the
+               tool result from Turn 1 is present in Turn 2's request.
 
 Usage (standalone test):
     PROXY_URL=http://localhost:4000 uv run python harness/runner.py sc-010
+    PROXY_URL=http://localhost:4000 uv run python harness/runner.py sc-010 --history full
 """
 
 from __future__ import annotations
@@ -52,6 +58,7 @@ class TurnResult:
     is_attack_turn: bool
     session_id: str
     seed: int
+    history_mode: str = "incremental"  # "incremental" | "full"
     # Decision record fields (None if proxy returned no decision in time)
     action: str = "unknown"
     risk_score: float = 0.0
@@ -112,15 +119,32 @@ def _post_turn(session_id: str, messages: list[dict]) -> tuple[bool, float]:
         return False, (time.perf_counter() - t0) * 1000
 
 
-def replay_scenario(scenario: Scenario, seed: int = 0) -> list[TurnResult]:
-    """Replay all turns of a scenario. Returns one TurnResult per turn."""
-    session_id = f"{scenario.id}-s{seed}"
+def replay_scenario(
+    scenario: Scenario,
+    seed: int = 0,
+    history_mode: str = "incremental",
+) -> list[TurnResult]:
+    """Replay all turns of a scenario. Returns one TurnResult per turn.
+
+    history_mode="incremental": each turn sends only its own messages (baseline).
+    history_mode="full": each turn sends all prior turns' messages prepended,
+        mirroring a real agent that maintains full conversation context.
+    """
+    session_id = f"{scenario.id}-s{seed}-{history_mode}"
     results: list[TurnResult] = []
+    accumulated: list[dict] = []  # grows turn-by-turn in full mode
 
     for idx, turn in enumerate(scenario.turns):
         before_byte = current_log_size()
-        messages = _messages_to_api(turn.messages)
+        turn_messages = _messages_to_api(turn.messages)
+
+        if history_mode == "full":
+            messages = accumulated + turn_messages
+        else:
+            messages = turn_messages
+
         ok, wall_ms = _post_turn(session_id, messages)
+        accumulated.extend(turn_messages)
 
         decision = wait_for_decision(session_id, after_byte=before_byte) if ok else None
 
@@ -133,6 +157,7 @@ def replay_scenario(scenario: Scenario, seed: int = 0) -> list[TurnResult]:
             is_attack_turn=turn.is_attack_turn,
             session_id=session_id,
             seed=seed,
+            history_mode=history_mode,
             proxy_ok=ok,
         )
         if decision:
@@ -154,15 +179,25 @@ def load_scenario(path: Path) -> Scenario:
 
 
 if __name__ == "__main__":
+    import argparse
     import json as _json
 
-    scenario_id = sys.argv[1] if len(sys.argv) > 1 else "sc-010"
-    paths = sorted(Path("corpus/scenarios").glob(f"{scenario_id}.yaml"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("scenario_id", nargs="?", default="sc-010")
+    parser.add_argument(
+        "--history",
+        choices=["incremental", "full"],
+        default="incremental",
+        help="incremental=turn-only messages (default); full=cumulative history",
+    )
+    args = parser.parse_args()
+
+    paths = sorted(Path("corpus/scenarios").glob(f"{args.scenario_id}.yaml"))
     if not paths:
-        sys.exit(f"Scenario {scenario_id} not found")
+        sys.exit(f"Scenario {args.scenario_id} not found")
 
     sc = load_scenario(paths[0])
-    print(f"Replaying {sc.id} ({sc.label}/{sc.scenario_class}) …")
-    results = replay_scenario(sc, seed=0)
+    print(f"Replaying {sc.id} ({sc.label}/{sc.scenario_class}) history={args.history} …")
+    results = replay_scenario(sc, seed=0, history_mode=args.history)
     for tr in results:
         print(_json.dumps(tr.__dict__, indent=2))

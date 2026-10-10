@@ -59,20 +59,29 @@ def _load_env_file() -> None:
 _load_env_file()
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 
+# (mode, level, history_mode)
+# Stateless runs in both modes so the paper can compare incremental vs full-history.
+# Session runs use incremental only — the session store provides the cross-turn
+# memory that full-history would duplicate.
 CONFIGS = [
-    ("stateless", "L0"),
-    ("stateless", "L1"),
-    ("stateless", "L2"),
-    ("stateless", "L3"),
-    ("session", "L0"),
-    ("session", "L1"),
-    ("session", "L2"),
-    ("session", "L3"),
+    ("stateless", "L0", "incremental"),
+    ("stateless", "L1", "incremental"),
+    ("stateless", "L2", "incremental"),
+    ("stateless", "L3", "incremental"),
+    ("stateless", "L0", "full"),
+    ("stateless", "L1", "full"),
+    ("stateless", "L2", "full"),
+    ("stateless", "L3", "full"),
+    ("session",   "L0", "incremental"),
+    ("session",   "L1", "incremental"),
+    ("session",   "L2", "incremental"),
+    ("session",   "L3", "incremental"),
 ]
 
 CSV_FIELDS = [
     "mode",
     "level",
+    "history_mode",
     "scenario_id",
     "scenario_label",
     "scenario_class",
@@ -147,10 +156,11 @@ def load_corpus() -> list[Scenario]:
     return scenarios
 
 
-def _row(mode: str, level: str, tr: TurnResult) -> dict:
+def _row(mode: str, level: str, history_mode: str, tr: TurnResult) -> dict:
     return {
         "mode": mode,
         "level": level,
+        "history_mode": history_mode,
         "scenario_id": tr.scenario_id,
         "scenario_label": tr.scenario_label,
         "scenario_class": tr.scenario_class,
@@ -173,7 +183,7 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
     classifier_backend = os.environ.get("CLASSIFIER_BACKEND", "none")
     # Local classifier may need to download the model on first run (~180 MB).
     health_timeout = 300.0 if classifier_backend == "local" else 120.0
-    print(f"Loaded {len(corpus)} scenarios, {n_seeds} seeds, {len(CONFIGS)} configs")
+    print(f"Loaded {len(corpus)} scenarios, {n_seeds} seeds, {len(CONFIGS)} configs (mode × level × history)")
     print(f"Classifier backend: {classifier_backend}")
     print(f"Total runs: {len(corpus) * n_seeds * len(CONFIGS)}\n")
 
@@ -181,8 +191,8 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
         writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
         writer.writeheader()
 
-        for mode, level in CONFIGS:
-            print(f"[{mode}/{level}] starting ...", flush=True)
+        for mode, level, history_mode in CONFIGS:
+            print(f"[{mode}/{level}/{history_mode}] starting ...", flush=True)
 
             if not dry_run:
                 clear_log()  # clear BEFORE container starts so it opens from byte 0
@@ -198,9 +208,9 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
                         continue
 
                     try:
-                        results = replay_scenario(scenario, seed=seed)
+                        results = replay_scenario(scenario, seed=seed, history_mode=history_mode)
                         for tr in results:
-                            writer.writerow(_row(mode, level, tr))
+                            writer.writerow(_row(mode, level, history_mode, tr))
                         fh.flush()
                         actions = [tr.action for tr in results]
                         print(f"{label} -> {actions}")
@@ -209,7 +219,7 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
 
             if not dry_run:
                 stop_proxy()
-                print(f"[{mode}/{level}] done\n")
+                print(f"[{mode}/{level}/{history_mode}] done\n")
 
     print(f"\nResults written to {RESULTS_CSV}")
 

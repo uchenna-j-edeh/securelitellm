@@ -20,8 +20,9 @@ taxonomy:
   owasp_agentic: ["A02-indirect-prompt-injection", "A03-sensitive-data-exfiltration"]
   nsa_mcp: ["T1.3-tool-output-injection"]
 expected_detects:
-  stateless: [L0, L1, L2, L3]   # source+sink co-present → all levels detect
-  session:   [L0, L1, L2, L3]
+  stateless:      [L0, L1, L2, L3]   # source+sink co-present → all levels detect
+  stateless_full: [L0, L1, L2, L3]   # single-turn: same as incremental
+  session:        [L0, L1, L2, L3]
 
 turns:
   - name: inject-and-exfil

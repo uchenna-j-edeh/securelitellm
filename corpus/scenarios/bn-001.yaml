@@ -29,8 +29,9 @@ taxonomy:
   owasp_agentic: []
   nsa_mcp: []
 expected_detects:
-  stateless: []   # benign: no detection expected at any level
-  session:   []
+  stateless:      []   # benign: no detection expected at any level
+  stateless_full: []
+  session:        []
 
 turns:
   - name: search-and-summarise

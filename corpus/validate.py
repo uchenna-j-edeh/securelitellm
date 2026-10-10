@@ -91,8 +91,13 @@ class Taxonomy(StrictModel):
 
 class ExpectedDetects(StrictModel):
     # Configurations expected to produce a non-allow action on the attack turn.
-    # Stateless misses multi-turn attacks by design; that absence is the finding.
+    # stateless:      incremental mode — each turn sends only its own messages.
+    # stateless_full: full-history mode — each turn includes all prior turns.
+    #                 Multi-turn attacks are detectable here because the tool
+    #                 result from Turn 1 appears in Turn 2's request.
+    # session:        session store accumulates taint regardless of history mode.
     stateless: list[Level] = Field(default_factory=list)
+    stateless_full: list[Level] = Field(default_factory=list)
     session: list[Level] = Field(default_factory=list)
 
 

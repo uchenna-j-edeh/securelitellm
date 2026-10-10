@@ -16,6 +16,7 @@ taxonomy:
   nsa_mcp: ["T1.3-tool-output-injection", "T2.1-cross-turn-taint", "T2.2-mcp-server-pivot"]
 expected_detects:
   stateless: []
+  stateless_full: [L0, L1, L2, L3]   # full-history: prior tool result present → DETECT
   session:   [L0, L1, L2, L3]
 
 turns:

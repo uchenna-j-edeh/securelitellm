@@ -19,6 +19,7 @@ taxonomy:
   nsa_mcp: ["T1.3-tool-output-injection", "T2.1-cross-turn-taint"]
 expected_detects:
   stateless: []                 # Turn 3 has no source → stateless misses
+  stateless_full: [L0, L1, L2, L3]   # full-history: prior tool result present → DETECT
   session:   [L0, L1, L2, L3]
 
 turns:

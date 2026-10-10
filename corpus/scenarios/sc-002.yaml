@@ -16,6 +16,7 @@ taxonomy:
   nsa_mcp: ["T1.3-tool-output-injection"]
 expected_detects:
   stateless: [L0, L1, L2, L3]
+  stateless_full: [L0, L1, L2, L3]   # single-turn: same as incremental
   session:   [L0, L1, L2, L3]
 
 turns:
