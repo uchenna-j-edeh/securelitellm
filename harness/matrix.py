@@ -59,24 +59,26 @@ def _load_env_file() -> None:
 _load_env_file()
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 
-# (mode, level, history_mode)
-# Stateless runs in both modes so the paper can compare incremental vs full-history.
-# Session runs use incremental only — the session store provides the cross-turn
-# memory that full-history would duplicate.
+# (mode, level) — one proxy restart per entry.
+# Stateless runs both history modes (incremental + full) in the same proxy
+# instance since history mode only affects what the harness sends, not how
+# the proxy is configured.  Session runs use incremental only — the session
+# store already provides cross-turn memory.
 CONFIGS = [
-    ("stateless", "L0", "incremental"),
-    ("stateless", "L1", "incremental"),
-    ("stateless", "L2", "incremental"),
-    ("stateless", "L3", "incremental"),
-    ("stateless", "L0", "full"),
-    ("stateless", "L1", "full"),
-    ("stateless", "L2", "full"),
-    ("stateless", "L3", "full"),
-    ("session",   "L0", "incremental"),
-    ("session",   "L1", "incremental"),
-    ("session",   "L2", "incremental"),
-    ("session",   "L3", "incremental"),
+    ("stateless", "L0"),
+    ("stateless", "L1"),
+    ("stateless", "L2"),
+    ("stateless", "L3"),
+    ("session",   "L0"),
+    ("session",   "L1"),
+    ("session",   "L2"),
+    ("session",   "L3"),
 ]
+
+HISTORY_MODES: dict[str, list[str]] = {
+    "stateless": ["incremental", "full"],
+    "session":   ["incremental"],
+}
 
 CSV_FIELDS = [
     "mode",
@@ -183,16 +185,19 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
     classifier_backend = os.environ.get("CLASSIFIER_BACKEND", "none")
     # Local classifier may need to download the model on first run (~180 MB).
     health_timeout = 300.0 if classifier_backend == "local" else 120.0
-    print(f"Loaded {len(corpus)} scenarios, {n_seeds} seeds, {len(CONFIGS)} configs (mode × level × history)")
+    n_history_runs = sum(len(HISTORY_MODES[m]) for m, _ in CONFIGS)
+    print(f"Loaded {len(corpus)} scenarios, {n_seeds} seeds, {len(CONFIGS)} proxy configs")
+    print(f"History modes per config: stateless={HISTORY_MODES['stateless']}, session={HISTORY_MODES['session']}")
     print(f"Classifier backend: {classifier_backend}")
-    print(f"Total runs: {len(corpus) * n_seeds * len(CONFIGS)}\n")
+    print(f"Total runs: {len(corpus) * n_seeds * n_history_runs}\n")
 
     with RESULTS_CSV.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
         writer.writeheader()
 
-        for mode, level, history_mode in CONFIGS:
-            print(f"[{mode}/{level}/{history_mode}] starting ...", flush=True)
+        for mode, level in CONFIGS:
+            history_modes = HISTORY_MODES[mode]
+            print(f"[{mode}/{level}] starting (history={history_modes}) ...", flush=True)
 
             if not dry_run:
                 clear_log()  # clear BEFORE container starts so it opens from byte 0
@@ -200,26 +205,27 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
                 wait_healthy(health_timeout)
                 time.sleep(2)  # grace period — proxy is healthy but hook may still be loading
 
-            for scenario in corpus:
-                for seed in range(n_seeds):
-                    label = f"  {scenario.id} seed={seed}"
-                    if dry_run:
-                        print(f"{label} [dry-run]")
-                        continue
+            for history_mode in history_modes:
+                for scenario in corpus:
+                    for seed in range(n_seeds):
+                        label = f"  [{history_mode}] {scenario.id} seed={seed}"
+                        if dry_run:
+                            print(f"{label} [dry-run]")
+                            continue
 
-                    try:
-                        results = replay_scenario(scenario, seed=seed, history_mode=history_mode)
-                        for tr in results:
-                            writer.writerow(_row(mode, level, history_mode, tr))
-                        fh.flush()
-                        actions = [tr.action for tr in results]
-                        print(f"{label} -> {actions}")
-                    except Exception as exc:
-                        print(f"{label} ERROR: {exc}", file=sys.stderr)
+                        try:
+                            results = replay_scenario(scenario, seed=seed, history_mode=history_mode)
+                            for tr in results:
+                                writer.writerow(_row(mode, level, history_mode, tr))
+                            fh.flush()
+                            actions = [tr.action for tr in results]
+                            print(f"{label} -> {actions}")
+                        except Exception as exc:
+                            print(f"{label} ERROR: {exc}", file=sys.stderr)
 
             if not dry_run:
                 stop_proxy()
-                print(f"[{mode}/{level}/{history_mode}] done\n")
+                print(f"[{mode}/{level}] done\n")
 
     print(f"\nResults written to {RESULTS_CSV}")
 
