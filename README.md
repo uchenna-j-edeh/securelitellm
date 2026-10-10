@@ -31,10 +31,10 @@ set -a
 source .env
 set +a
 
-# 5. Lint and test
+# 5. Lint and unit tests
 make lint test
 
-# 6. Start the stack
+# 6. Start the stack (production-like)
 make up
 
 # 7. Send a completion
@@ -43,7 +43,12 @@ curl http://localhost:4000/chat/completions \
   -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
   -d '{"model":"mock","messages":[{"role":"user","content":"hello"}]}'
 
-# 8. Stop services
+# 8. Run E2E tests (separate stack with test key + harness overlay)
+make e2e-up
+make test-e2e
+make e2e-down
+
+# 9. Stop services
 make down
 ```
 
@@ -172,8 +177,18 @@ The `.env` file is ignored by Git. Never commit the real key.
 make lint test
 ```
 
-Expected: `All checks passed!` from ruff and all unit tests passing. End-to-end
-tests run separately with `make test-e2e` after the stack is healthy.
+Expected: `All checks passed!` from ruff and all unit tests passing.
+
+End-to-end tests use a dedicated stack with a well-known test key and the
+harness log overlay — never the production key from `deploy/.env`:
+
+```bash
+make e2e-up    # start proxy: mock classifier, stateless, sk-test-e2e-key
+make test-e2e  # run pytest tests/test_e2e.py
+make e2e-down  # tear it down
+```
+
+`make test-e2e` can be run from any terminal once `make e2e-up` is healthy.
 
 ### Step 3 — Start the stack
 
@@ -336,8 +351,9 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `ROUTER_MODE` | `session` | `stateless`, `session` |
 | `ROUTER_LEVEL` | `L3` | `L0`, `L1`, `L2`, `L3` |
 | `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
-| `ROUTER_LOG_PATH` | `-` (stdout) | any file path |
-| `CLASSIFIER_BACKEND` | `none` | `none`, `local`, `promptguard`, `llmguard` |
+| `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false` or `classifier_backend=none`) at startup |
+| `ROUTER_LOG_PATH` | `-` (stdout) | any file path; harness overlay sets `/logs/decisions.jsonl` |
+| `CLASSIFIER_BACKEND` | `none` | `none`, `local`, `mock`, `promptguard`, `llmguard` |
 | `LOCAL_CLASSIFIER_URL` | `http://local-classifier:8080` | URL of the local classifier sidecar |
 | `CLASSIFIER_MODEL` | `protectai/deberta-v3-base-prompt-injection-v2` | any HuggingFace text-classification model |
 
