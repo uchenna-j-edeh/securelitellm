@@ -382,22 +382,40 @@ deployment enable switch, see [`infra/README.md`](infra/README.md).
 
 The evaluation replays the attack corpus across all 8 proxy configurations (2 modes × 4 levels). Stateless configurations run twice per proxy start — once with `history_mode=incremental` (each turn sends only its own messages) and once with `history_mode=full` (all prior messages prepended), for 12 distinct run groups in total. Every turn result is written to `eval/results/results.csv` with a `history_mode` column, then metrics are computed.
 
-### Without a classifier (structural detection only)
+### Running the corpus experiment
+
+> **A classifier is required.** Since C10/C10b (#76) the router is fail-closed: any request carrying tool results is rejected with HTTP 400 when `CLASSIFIER_BACKEND=none`, before a decision record is written. A plain `make eval` therefore records every tool-bearing turn as `unknown` and reports 0% DR / 0% FPR while still exiting 0. Always set `CLASSIFIER_BACKEND=local`.
 
 ```bash
-# Stack must be down — the harness manages it
-make eval
-```
+# 1. Validate the corpus (fast, no Docker)
+uv run python corpus/validate.py
+uv run pytest tests/test_corpus_schema.py -q
 
-Runs all 8 configs with `CLASSIFIER_BACKEND=none`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
+# 2. Check run coverage without starting the proxy
+make eval-dry
 
-### With the local DeBERTa classifier
-
-```bash
-# Build the classifier sidecar once (downloads ~180 MB on first run)
+# 3. Build the classifier sidecar once (downloads ~180 MB on first run)
 make classifier-up
 
-# Run the full matrix — CLASSIFIER_BACKEND=local starts the sidecar automatically
+# 4. Run the full matrix + metrics. The harness restarts the stack for every
+#    config and tears it down at the end, so run `make up` again afterwards.
+CLASSIFIER_BACKEND=local make eval
+```
+
+`make eval` runs `harness/matrix.py --seeds 3` (612 runs) and then `eval/metrics.py --table --figures`. Expect it to take several hours. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
+
+**Sanity-check the run.** In the progress log, every turn should resolve to `allow`, `route-hardened`, `strip-tools`, or `block`. If you see `['unknown', ...]`, the proxy is rejecting requests. Check `docker logs deploy-litellm-1` for `classifier is required but not configured`. A quick check against the finished CSV:
+
+```bash
+grep -c ',unknown,' eval/results/results.csv   # should print 0
+```
+
+Outputs: `eval/results/results.csv`, `eval/results/metrics.csv`, `eval/results/figures/dr_fpr.png`, `eval/results/figures/dr_heatmap.png`.
+
+### Running steps individually
+
+```bash
+# CLASSIFIER_BACKEND=local adds the classifier sidecar overlay automatically
 CLASSIFIER_BACKEND=local uv run python harness/matrix.py --seeds 3
 uv run python eval/metrics.py --table --figures
 ```
