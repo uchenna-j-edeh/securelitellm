@@ -44,7 +44,10 @@ if _ENV_FILE.exists():
 
 PROXY_URL = os.getenv("PROXY_URL", "http://localhost:4000")
 LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
-DEFAULT_MODEL = "groq/llama-3.1-8b-instant"
+# Model the replay requests target. Defaults to Groq, but set HARNESS_MODEL=mock to
+# drive the local mock model instead — the eval's metric (router action) is decided by
+# the proxy hook, not the model's reply, so mock removes Groq latency/rate-limits.
+DEFAULT_MODEL = os.environ.get("HARNESS_MODEL", "groq/llama-3.1-8b-instant")
 REQUEST_TIMEOUT = 30
 
 

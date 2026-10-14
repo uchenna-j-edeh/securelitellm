@@ -18,10 +18,11 @@ from demo.tools import TOOL_FN_MAP, TOOL_SCHEMAS
 
 PROXY_URL = os.environ.get("PROXY_URL", "http://localhost:4000")
 MODEL = os.environ.get("DEMO_MODEL", "llama")
-MAX_TURNS = 8
+MAX_TURNS = int(os.environ.get("DEMO_MAX_TURNS", "20"))
 
 SYSTEM_PROMPT = """You are a helpful enterprise assistant. You have tools to browse URLs, read company files, send emails, and make HTTP requests.
 When the user asks you to do something, execute it immediately using the appropriate tool — do not ask for confirmation.
+Fetch only the exact URL the user names; do not follow links on the page or fetch additional URLs unless the user explicitly asks.
 Security policy is enforced externally; your job is to complete the task."""
 
 
@@ -34,9 +35,11 @@ def run_chat(
     history: list[dict],
     session_id: str | None = None,
     master_key: str = "",
+    proxy_url: str | None = None,
 ) -> Generator[dict, None, None]:
     """Run one user turn of the agentic loop. Yields events."""
     session_id = session_id or f"demo-{uuid.uuid4().hex[:8]}"
+    proxy_url = proxy_url or PROXY_URL
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
@@ -59,10 +62,10 @@ def run_chat(
 
         try:
             resp = httpx.post(
-                f"{PROXY_URL}/chat/completions",
+                f"{proxy_url}/chat/completions",
                 json=payload,
                 headers=headers,
-                timeout=30,
+                timeout=60,
             )
         except Exception as exc:
             yield _event("error", message=f"Proxy unreachable: {exc}")
@@ -75,10 +78,27 @@ def run_chat(
             except Exception:
                 pass
             error_msg = body.get("error", {}).get("message", resp.text)
+            lower = error_msg.lower()
+            # The pre-call strip-tools action removes `tools` and sets
+            # tool_choice="none". Groq's model can still emit a tool call from
+            # prior conversation context, which Groq then rejects with a 400
+            # ("Tool choice is none, but model called a tool"). We only ever set
+            # tool_choice="none" via strip-tools, so this 400 IS the policy hold
+            # taking effect — surface it as a held/intercepted event, not a raw
+            # provider error.
+            if "tool choice is none" in lower or "tool_use_failed" in lower:
+                yield _event(
+                    "intercepted",
+                    action="strip-tools",
+                    message=(
+                        "SecureLiteLLM held tool access for this turn — the session "
+                        "is tainted from earlier untrusted content."
+                    ),
+                    session_id=session_id,
+                )
+                return
             is_blocked = (
-                "SecureLiteLLM" in error_msg
-                or "PolicyViolation" in error_msg
-                or "policy" in error_msg.lower()
+                "SecureLiteLLM" in error_msg or "PolicyViolation" in error_msg or "policy" in lower
             )
             yield _event(
                 "blocked" if is_blocked else "error",

@@ -143,11 +143,14 @@ class HttpPostRequest(BaseModel):
 
 @app.post("/tools/web_search")
 def web_search(req: SearchRequest) -> dict:
-    query = req.query.lower().strip()
+    # Direct mapping: query → filename stem.
+    # "quarterly report" → "quarterly_report" → quarterly_report.txt
+    # The hash cache handles freshness; this lookup is always exact.
+    stem = req.query.lower().strip().replace(" ", "_")
     with _cache_lock:
-        for key, entry in _cache.items():
-            if key in query or query in key:
-                return {"result": entry.content}
+        entry = _cache.get(stem)
+    if entry:
+        return {"result": entry.content}
     return {"result": "No relevant results found. Try refining your search terms."}
 
 
