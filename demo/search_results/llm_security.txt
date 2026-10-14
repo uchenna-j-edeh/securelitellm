@@ -1,0 +1,1 @@
+LLM Security Research 2025: top topics are prompt injection defences, jailbreaks, and alignment. Key venues: IEEE S&P, USENIX, ACL. DeBERTa classifiers reach 96% accuracy on injection benchmarks.

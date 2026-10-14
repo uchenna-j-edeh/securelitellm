@@ -30,6 +30,18 @@ LOGS_DIR.mkdir(exist_ok=True)
 MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "")
 CONTAINER_NAME = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
 
+# Dual-proxy wiring for the live A/B delayed-exfil demo. Each mode points at a
+# separate proxy container running a different ROUTER_MODE; the decision log is
+# read from whichever container served the turn.
+PROXY_BY_MODE = {
+    "session": os.environ.get("PROXY_URL_SESSION", "http://localhost:4000"),
+    "stateless": os.environ.get("PROXY_URL_STATELESS", "http://localhost:4001"),
+}
+CONTAINER_BY_MODE = {
+    "session": os.environ.get("CONTAINER_SESSION", CONTAINER_NAME),
+    "stateless": os.environ.get("CONTAINER_STATELESS", "deploy-litellm-stateless-1"),
+}
+
 app = FastAPI(title="SecureLiteLLM Demo")
 app.mount("/static", StaticFiles(directory=str(DEMO_DIR / "static")), name="static")
 
@@ -47,6 +59,11 @@ async def chat(request: Request) -> StreamingResponse:
     body = await request.json()
     user_message: str = body.get("message", "").strip()
     session_id: str = body.get("session_id", "")
+    mode: str = body.get("mode", "session")
+    if mode not in PROXY_BY_MODE:
+        mode = "session"
+    proxy_url = PROXY_BY_MODE[mode]
+    container = CONTAINER_BY_MODE[mode]
 
     if not user_message:
         return StreamingResponse(
@@ -58,24 +75,32 @@ async def chat(request: Request) -> StreamingResponse:
 
     def stream():
         assistant_content = None
+        was_blocked = False
 
         for event in run_chat(
             user_message=user_message,
             history=history,
             session_id=session_id,
             master_key=MASTER_KEY,
+            proxy_url=proxy_url,
         ):
             yield f"data: {json.dumps(event)}\n\n"
 
-            # Track assistant final message for history
             if event["kind"] == "assistant_message":
                 assistant_content = event["content"]
+            if event["kind"] == "blocked":
+                was_blocked = True
 
         # Pull decision records for this session from container logs
         time.sleep(0.5)
-        decisions = _decisions_for_session(session_id)
+        decisions = _decisions_for_session(session_id, container)
         for d in decisions:
             yield f"data: {json.dumps({'kind': 'decision', 'record': d})}\n\n"
+
+        # Enrich the blocked banner with the last decision's context
+        if was_blocked and decisions:
+            last = decisions[-1]
+            yield f"data: {json.dumps({'kind': 'block_context', 'record': last})}\n\n"
 
         # Persist turn to session history
         if session_id:
@@ -126,10 +151,10 @@ async def clear_logs() -> dict:
     return {"status": "cleared"}
 
 
-def _decisions_for_session(session_id: str) -> list[dict]:
+def _decisions_for_session(session_id: str, container: str = CONTAINER_NAME) -> list[dict]:
     try:
         result = subprocess.run(
-            ["docker", "logs", "--tail", "200", CONTAINER_NAME],
+            ["docker", "logs", "--tail", "200", container],
             capture_output=True,
             text=True,
             timeout=5,

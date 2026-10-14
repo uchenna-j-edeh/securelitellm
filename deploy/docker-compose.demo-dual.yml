@@ -1,0 +1,50 @@
+# Demo dual-proxy overlay — live A/B for the delayed-exfil demo.
+#
+# Adds a SECOND proxy, litellm-stateless, on :4001 running ROUTER_MODE=stateless,
+# alongside the default session-mode proxy on :4000. Both share the same local
+# DeBERTa classifier sidecar and mock model, so the ONLY difference between them
+# is the routing mode — exactly the variable the demo isolates.
+#
+# Usage (from repo root):
+#   docker compose -f deploy/docker-compose.yml \
+#                  -f deploy/docker-compose.classifier.yml \
+#                  -f deploy/docker-compose.demo-dual.yml \
+#                  up -d --build
+#
+# Or: make demo-dual-up
+#
+#   session proxy    → http://localhost:4000   (catches delayed exfil)
+#   stateless proxy  → http://localhost:4001   (misses delayed exfil)
+
+services:
+  litellm-stateless:
+    image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
+    ports:
+      - "127.0.0.1:4001:4000"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+      - ..:/workspace:ro
+    command: --config /app/config.yaml --port 4000
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY in .env}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - PYTHONPATH=/workspace
+      - ROUTER_MODE=stateless
+      - ROUTER_LEVEL=${ROUTER_LEVEL:-L3}
+      - ROUTER_LOG_PATH=-
+      - CLASSIFIER_BACKEND=local
+      - LOCAL_CLASSIFIER_URL=http://local-classifier:8080
+      - PROMPTGUARD_THRESHOLD=${PROMPTGUARD_THRESHOLD:-0.5}
+      - ROUTER_ENFORCE=${ROUTER_ENFORCE:-true}
+      - ROUTER_HARDENED_MODEL=${ROUTER_HARDENED_MODEL:-mock}
+      - POLICY_PATH=${POLICY_PATH:-/workspace/deploy/policy.yaml}
+    depends_on:
+      mock-model:
+        condition: service_healthy
+      local-classifier:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

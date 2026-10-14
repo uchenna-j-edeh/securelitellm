@@ -75,23 +75,63 @@ def _sink_category(fn_name: str) -> str:
     return "other"
 
 
+def _sink_result_ids(messages: list[dict[str, Any]]) -> set[str]:
+    """tool_call_ids whose originating assistant call is an exfil/write sink.
+
+    A sink's own result (e.g. {"status": "sent"}) is first-party scaffolding —
+    a receipt the agent produced, not untrusted external content. Scanning it as
+    a source both (a) feeds out-of-distribution JSON to the injection classifier,
+    which false-positives on it, and (b) wrongly marks the session as having seen
+    untrusted content. Read-tool results (file/web/search) are NOT excluded —
+    those carry the genuinely untrusted external content we must scan.
+    """
+    sink_ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            name = call.get("function", {}).get("name", "")
+            if _sink_category(name) in ("exfil", "write"):
+                cid = call.get("id")
+                if cid:
+                    sink_ids.add(cid)
+    return sink_ids
+
+
 def classify_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract role=tool messages as source candidates with trust tier."""
+    """Extract role=tool messages as source candidates with trust tier.
+
+    Sink-result echoes are tagged trust_tier="internal" (trusted first-party
+    scaffolding) so downstream scanning treats them as safe — see
+    _sink_result_ids.
+    """
+    sink_result_ids = _sink_result_ids(messages)
     sources = []
     for msg in messages:
         if msg.get("role") != "tool":
             continue
         content = str(msg.get("content", ""))
+        # A sink's own confirmation is first-party scaffolding, not untrusted
+        # external content — mark it trusted so it is never scanned or tainted.
+        if msg.get("tool_call_id") in sink_result_ids:
+            trust_tier = "internal"
+        else:
+            trust_tier = _infer_trust_tier(msg)
         sources.append(
             {
                 "tool_call_id": msg.get("tool_call_id"),
-                "trust_tier": _infer_trust_tier(msg),
+                "trust_tier": trust_tier,
                 "content_length": len(content),
                 "content_for_classifier": content,
                 "content_hash": hashlib.sha256(content.encode()).hexdigest(),
             }
         )
     return sources
+
+
+def is_trusted_source(source: dict[str, Any]) -> bool:
+    """True for first-party sources that must never be scanned or tainted."""
+    return source.get("trust_tier") == "internal"
 
 
 def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

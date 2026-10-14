@@ -164,7 +164,10 @@ def test_clean_request_no_taint():
 
 
 @pytest.mark.e2e
-def test_tool_result_sets_untrusted_seen():
+def test_benign_tool_result_is_scanned_not_tainted():
+    """Verdict-based routing: a BENIGN-classified tool result is scanned (source
+    recorded) but does NOT set untrusted_seen, so clean read→send flows are not
+    route-hardened. The e2e mock classifier always returns BENIGN."""
     run_id = f"e2e-source-{int(time.time())}"
     _chat(
         "mock",
@@ -194,12 +197,18 @@ def test_tool_result_sets_untrusted_seen():
     records = _last_decision_records(20)
     matching = [r for r in records if r.get("session_id") == run_id]
     assert matching
-    assert matching[-1]["features"]["untrusted_seen"] is True
+    feats = matching[-1]["features"]
+    # Source was seen/scanned, but a BENIGN verdict does not taint the request.
+    assert feats["source_ids"]
+    assert feats["untrusted_seen"] is False
 
 
 @pytest.mark.e2e
-def test_injection_scenario_flags_both_features():
-    """Tool result with injection payload + email sink → both L0 flags true."""
+def test_benign_source_with_sink_not_route_hardened():
+    """Tool result + email sink, BENIGN classifier → sink is detected but the
+    request is not flagged untrusted, so it is allowed (no false positive).
+    Real injection detection is covered by the unit tests and corpus eval, which
+    use a content-aware classifier (the e2e mock is fixed-label BENIGN)."""
     run_id = f"e2e-inject-{int(time.time())}"
     _chat(
         "mock",
@@ -244,8 +253,9 @@ def test_injection_scenario_flags_both_features():
     matching = [r for r in records if r.get("session_id") == run_id]
     assert matching
     features = matching[-1]["features"]
-    assert features["untrusted_seen"] is True
+    # Sink is detected structurally; BENIGN source does not taint → no false positive.
     assert features["sink_requested"] is True
+    assert features["untrusted_seen"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -295,5 +305,9 @@ def test_two_sessions_are_isolated():
     rec_b = next((r for r in records if r.get("session_id") == run_b), None)
 
     assert rec_a is not None and rec_b is not None
-    assert rec_a["features"]["untrusted_seen"] is True
+    # Both benign under the mock classifier → neither tainted. Requests are still
+    # handled independently: A scanned a tool-result source, B had none.
+    assert rec_a["features"]["source_ids"]
+    assert not rec_b["features"].get("source_ids")
+    assert rec_a["features"]["untrusted_seen"] is False
     assert rec_b["features"]["untrusted_seen"] is False
