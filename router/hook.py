@@ -25,7 +25,12 @@ from router.logger import DecisionLogger
 from router.parser import extract_tool_context
 from router.policy import PolicyEngine, PolicyViolation
 from router.session import get_store
-from router.taint import classify_sinks, classify_sources, tainted_spans_in_sink_args
+from router.taint import (
+    classify_sinks,
+    classify_sources,
+    is_trusted_source,
+    tainted_spans_in_sink_args,
+)
 
 
 def _derive_session_id(data: dict, request_id: str) -> str:
@@ -57,8 +62,9 @@ def _extract_features(
         # clean read→write flows from triggering false positives.
         features["untrusted_seen"] = state.tainted
     else:
-        # Stateless: no session memory, fall back to structural signal
-        features["untrusted_seen"] = len(sources) > 0
+        # Stateless: no session memory, fall back to structural signal.
+        # Trusted first-party sources (e.g. sink-result echoes) don't count.
+        features["untrusted_seen"] = any(not is_trusted_source(s) for s in sources)
 
     if level in ("L1", "L2", "L3"):
         features["source_ids"] = [s["tool_call_id"] for s in sources]
@@ -102,11 +108,15 @@ class RouterHook(CustomLogger):
         features["streaming_tool_request"] = bool(data.get("stream") and data.get("tools"))
 
         sources = classify_sources(messages)
-        classifier_verdicts: list[dict] = []
+        # Trusted first-party sources (sink-result echoes) are never scanned or
+        # tainted — only genuinely untrusted content reaches the classifier.
+        # They still get a SAFE verdict so they remain visible in the decision log.
+        untrusted_sources = [s for s in sources if not is_trusted_source(s)]
+        safe_verdicts = [_safe_verdict(s) for s in sources if is_trusted_source(s)]
 
-        # Classifier is mandatory whenever tool results are present.
+        # Classifier is mandatory whenever untrusted tool results are present.
         # No valid production path bypasses classification.
-        if sources and self._classifier is None:
+        if untrusted_sources and self._classifier is None:
             import litellm.exceptions as _le
 
             raise _le.BadRequestError(
@@ -118,9 +128,13 @@ class RouterHook(CustomLogger):
                 llm_provider="",
             )
 
-        # Run classifier on ALL levels (not only L2/L3) when sources are present.
-        if sources and self._classifier is not None:
-            classifier_verdicts = await _classify_sources(self._classifier, sources)
+        # Run classifier on ALL levels (not only L2/L3) when untrusted sources are present.
+        untrusted_verdicts: list[dict] = []
+        if untrusted_sources and self._classifier is not None:
+            untrusted_verdicts = await _classify_sources(self._classifier, untrusted_sources)
+
+        classifier_verdicts = safe_verdicts + untrusted_verdicts
+        if classifier_verdicts:
             features["classifier_verdicts"] = classifier_verdicts
             features["classifier_injection"] = any(
                 v.get("label") == "INJECTION" for v in classifier_verdicts
@@ -130,19 +144,31 @@ class RouterHook(CustomLogger):
             )
 
         # Record sources into session store (session mode only).
-        # With classifier:    only taint sources flagged INJECTION — clean content passes through.
-        # Without classifier: taint all sources (fail-closed, same as before).
+        # With classifier:    only taint untrusted sources flagged INJECTION — clean content passes.
+        # Without verdicts:   taint untrusted sources (fail-closed).
+        # Trusted first-party sources are recorded but never tainted.
         if self.config.mode == "session":
             store = get_store()
             injected_ids = {
-                v["source_id"] for v in classifier_verdicts if v.get("label") == "INJECTION"
+                v["source_id"] for v in untrusted_verdicts if v.get("label") == "INJECTION"
             }
             for src in sources:
-                taint = not classifier_verdicts or src.get("tool_call_id") in injected_ids
+                if is_trusted_source(src):
+                    taint = False
+                else:
+                    taint = not untrusted_verdicts or src.get("tool_call_id") in injected_ids
                 store.record_source(session_id, src, taint=taint)
             # Refresh after recording so the logged feature and policy both see
             # taint set by tool results in the current request.
             features["untrusted_seen"] = store.state(session_id).tainted
+        else:
+            # Stateless: no session memory, so judge the current request on the
+            # classifier's verdict rather than bare provenance. Untrusted content
+            # counts as "seen" only if it was flagged INJECTION, or the classifier
+            # errored (fail-closed). Clean BENIGN reads no longer trip untrusted_and_sink.
+            features["untrusted_seen"] = features.get(
+                "classifier_injection", False
+            ) or features.get("classifier_error", False)
 
         # M4: evaluate policy rules → risk score → action
         risk_score, action, matched_rules = self._policy.evaluate(features)
@@ -228,21 +254,35 @@ class RouterHook(CustomLogger):
         features["streaming_tool_request"] = False
 
         sources = classify_sources(messages)
-        if sources and self._classifier is not None:
-            verdicts = await _classify_sources(self._classifier, sources)
+        untrusted_sources = [s for s in sources if not is_trusted_source(s)]
+        verdicts = [_safe_verdict(s) for s in sources if is_trusted_source(s)]
+        if untrusted_sources and self._classifier is not None:
+            verdicts.extend(await _classify_sources(self._classifier, untrusted_sources))
+        injected_ids = {v["source_id"] for v in verdicts if v.get("label") == "INJECTION"}
+        if verdicts:
             features["classifier_verdicts"] = verdicts
-            features["classifier_injection"] = any(
-                verdict.get("label") == "INJECTION" for verdict in verdicts
-            )
+            features["classifier_injection"] = len(injected_ids) > 0
             features["classifier_error"] = any(
                 verdict.get("label") == "UNKNOWN" for verdict in verdicts
             )
+
+        if self.config.mode != "session":
+            # Stateless: judge on the classifier verdict, not bare provenance.
+            features["untrusted_seen"] = features.get(
+                "classifier_injection", False
+            ) or features.get("classifier_error", False)
 
         if self.config.level == "L3":
             if self.config.mode == "session":
                 tainted_hashes = get_store().state(session_id).tainted_spans
             else:
-                tainted_hashes = [source["content_hash"] for source in sources]
+                # Stateless: only content the classifier actually flagged INJECTION
+                # is a tainted span — a clean file emailed verbatim must not match.
+                tainted_hashes = [
+                    s["content_hash"]
+                    for s in untrusted_sources
+                    if s.get("tool_call_id") in injected_ids
+                ]
             features["tainted_spans_in_sink_args"] = tainted_spans_in_sink_args(
                 tainted_hashes,
                 egress_sinks,
@@ -305,6 +345,23 @@ def _init_classifier(backend: str) -> BaseClassifier | None:
         raise RuntimeError(
             f"Failed to initialize configured classifier backend {backend!r}"
         ) from exc
+
+
+def _safe_verdict(src: dict) -> dict:
+    """Synthetic BENIGN verdict for a trusted first-party source.
+
+    Trusted sources (sink-result echoes) are never sent to the classifier, but
+    we emit a verdict so they stay visible in the decision log, labelled safe.
+    """
+    return {
+        "label": "BENIGN",
+        "score": 0.0,
+        "model": "trusted-first-party",
+        "cached": False,
+        "latency_ms": 0.0,
+        "source_id": src.get("tool_call_id"),
+        "trusted": True,
+    }
 
 
 async def _classify_sources(
