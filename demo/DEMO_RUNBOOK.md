@@ -190,8 +190,27 @@ file — read the real decision from `docker logs` as shown.)
 - **Toggle to a clean file mid-attack:** edit `quarterly_report.txt` to match
   `annual_report.txt`; the file-backed search cache picks it up within ~5s, no restart.
 
+## Restart
+
+```bash
+# 1. Proxy stack (rebuilds images, so it picks up router/ changes)
+make demo-dual-down
+make demo-dual-up
+
+# 2. MCP tool server + web UI — Ctrl+C in terminals 2 and 3, or kill by port:
+kill $(lsof -tiTCP:8002 -sTCP:LISTEN) $(lsof -tiTCP:8003 -sTCP:LISTEN)
+make demo-mcp        # terminal 2
+make demo            # terminal 3
+
+# 3. Optional: empty the Outbox
+curl -X DELETE localhost:8003/logs
+```
+
+Only changed `demo/` code? Skip step 1 — restarting the MCP server and UI is enough.
+
 ## Teardown
 
 ```bash
 make demo-dual-down
+kill $(lsof -tiTCP:8002 -sTCP:LISTEN) $(lsof -tiTCP:8003 -sTCP:LISTEN)
 ```
