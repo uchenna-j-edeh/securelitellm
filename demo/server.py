@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from demo.agent import run_chat  # noqa: E402
+from router.session import session_ref  # noqa: E402
 
 DEMO_DIR = Path(__file__).parent
 LOGS_DIR = DEMO_DIR / "logs"
@@ -45,8 +46,10 @@ CONTAINER_BY_MODE = {
 app = FastAPI(title="SecureLiteLLM Demo")
 app.mount("/static", StaticFiles(directory=str(DEMO_DIR / "static")), name="static")
 
-# In-memory session store  {session_id: [messages]}
-_sessions: dict[str, list[dict]] = {}
+# In-memory UI sessions keyed by the browser's session handle (not a proxy id):
+#   {"proxy_id": raw proxy-issued x-agent-run-id or None, "history": [messages]}
+# The raw proxy id is a session secret: it stays here and never reaches the browser.
+_sessions: dict[str, dict] = {}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -71,29 +74,36 @@ async def chat(request: Request) -> StreamingResponse:
             media_type="text/event-stream",
         )
 
-    history = _sessions.get(session_id, [])
+    ui = _sessions.setdefault(session_id, {"proxy_id": None, "history": []})
 
     def stream():
         assistant_content = None
         was_blocked = False
+        reset = False
 
         for event in run_chat(
             user_message=user_message,
-            history=history,
-            session_id=session_id,
+            history=ui["history"],
+            session_id=ui["proxy_id"],
             master_key=MASTER_KEY,
             proxy_url=proxy_url,
         ):
+            if event["kind"] == "proxy_session":
+                ui["proxy_id"] = event["session_id"]
+                event = {"kind": "proxy_session", "session_ref": event["session_ref"]}
             yield f"data: {json.dumps(event)}\n\n"
 
             if event["kind"] == "assistant_message":
                 assistant_content = event["content"]
             if event["kind"] == "blocked":
                 was_blocked = True
+            if event["kind"] == "session_reset":
+                reset = True
 
         # Pull decision records for this session from container logs
         time.sleep(0.5)
-        decisions = _decisions_for_session(session_id, container)
+        ref = session_ref(ui["proxy_id"]) if ui["proxy_id"] else None
+        decisions = _decisions_for_session(ref, container) if ref else []
         for d in decisions:
             yield f"data: {json.dumps({'kind': 'decision', 'record': d})}\n\n"
 
@@ -102,14 +112,17 @@ async def chat(request: Request) -> StreamingResponse:
             last = decisions[-1]
             yield f"data: {json.dumps({'kind': 'block_context', 'record': last})}\n\n"
 
+        # The proxy rejected the session (expired, restarted, ...): start clean.
+        if reset:
+            ui["proxy_id"], ui["history"] = None, []
         # Persist turn to session history
-        if session_id:
-            hist = _sessions.setdefault(session_id, [])
+        elif session_id:
+            hist = ui["history"]
             hist.append({"role": "user", "content": user_message})
             if assistant_content:
                 hist.append({"role": "assistant", "content": assistant_content})
             # Keep last 20 messages
-            _sessions[session_id] = hist[-20:]
+            ui["history"] = hist[-20:]
 
         yield f"data: {json.dumps({'kind': 'stream_end'})}\n\n"
 
@@ -151,7 +164,8 @@ async def clear_logs() -> dict:
     return {"status": "cleared"}
 
 
-def _decisions_for_session(session_id: str, container: str = CONTAINER_NAME) -> list[dict]:
+def _decisions_for_session(ref: str, container: str = CONTAINER_NAME) -> list[dict]:
+    """Decision records whose session_id (a session_ref) matches *ref*."""
     try:
         result = subprocess.run(
             ["docker", "logs", "--tail", "200", container],
@@ -166,7 +180,7 @@ def _decisions_for_session(session_id: str, container: str = CONTAINER_NAME) -> 
                 continue
             try:
                 d = json.loads(line)
-                if d.get("session_id") == session_id and "features" in d:
+                if d.get("session_id") == ref and "features" in d:
                     records.append(d)
             except json.JSONDecodeError:
                 pass

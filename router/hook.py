@@ -8,12 +8,20 @@ M3 — classifier integrated at L2/L3; classifier_verdicts added to features.
 M4 — policy engine wired; routing actions allow/route-hardened/strip-tools/block.
 M5 — generated non-streaming tool calls are re-evaluated before release and
      mapped to execute/hold/block; streaming tool requests fail closed.
+
+Sessions (#145, #146, #147) — the proxy issues session ids. A request without
+x-agent-run-id starts a session: it may contain only system/user messages, and
+the new id is returned in the x-agent-run-id response header. Every later
+request must present that id; malformed, unknown, expired, or foreign-key ids
+are rejected. Logs carry session_ref (a hash prefix), never the raw id.
 """
 
 import asyncio
 import copy
 import time
 import uuid
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,7 +32,14 @@ from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
 from router.policy import PolicyEngine, PolicyViolation
-from router.session import SessionExpired, get_store
+from router.session import (
+    SessionError,
+    SessionExpired,
+    get_store,
+    is_well_formed,
+    session_key,
+    session_ref,
+)
 from router.taint import (
     classify_sinks,
     classify_sources,
@@ -32,11 +47,46 @@ from router.taint import (
     tainted_spans_in_sink_args,
 )
 
+SESSION_HEADER = "x-agent-run-id"
+_SESSION_START_ROLES = frozenset({"system", "developer", "user"})
+_ISSUED_CACHE_MAX = 10_000  # request_id -> raw id, until the response headers are sent
 
-def _derive_session_id(data: dict, request_id: str) -> str:
+
+@dataclass
+class _Session:
+    key: str  # session_key(raw id): the store key
+    ref: str  # session_ref(raw id): logged
+    issued: bool = False  # True if this request started the session
+
+
+class _SessionViolation(Exception):
+    def __init__(self, reason: str, message: str, ref: str | None = None, **detail: Any) -> None:
+        self.reason = reason
+        self.ref = ref
+        self.detail = detail
+        super().__init__(message)
+
+
+def _session_header(data: dict) -> str | None:
+    """Raw x-agent-run-id value, or None if the header is absent."""
     headers = data.get("metadata", {}).get("headers", {}) or {}
-    run_id = headers.get("x-agent-run-id", "").strip()
-    return run_id if run_id else f"no-session-{request_id[:8]}"
+    value = headers.get(SESSION_HEADER)
+    return value if value is None else str(value)
+
+
+def _api_key_owner(user_api_key_dict: Any) -> str:
+    """Hashed LiteLLM API key the session is bound to ("" if unavailable)."""
+    token = getattr(user_api_key_dict, "token", None)
+    return token if isinstance(token, str) else ""
+
+
+def _is_session_start(messages: list[dict]) -> bool:
+    """A new session may carry only system/developer/user messages.
+
+    Assistant turns, tool calls, or tool results mean the run is already in
+    progress — starting a fresh session there would shed its taint.
+    """
+    return all(m.get("role") in _SESSION_START_ROLES for m in messages)
 
 
 def _extract_features(
@@ -89,38 +139,86 @@ class RouterHook(CustomLogger):
         self.decision_logger = DecisionLogger(self.config.log_path)
         self._classifier: BaseClassifier | None = _init_classifier(self.config.classifier_backend)
         self._policy = PolicyEngine.from_yaml(self.config.policy_path or None)
+        self._issued: OrderedDict[str, str] = OrderedDict()
         self.decision_logger.emit(self.config.startup_record())
 
-    def _session_gate(self, session_id: str, request_id: str, phase: str, data: dict) -> None:
-        """Reject requests that reuse an expired or ended session id (#147).
+    def _issue_session(self, request_id: str, owner: str) -> _Session:
+        raw = get_store().issue(owner)
+        self._issued[request_id] = raw
+        while len(self._issued) > _ISSUED_CACHE_MAX:
+            self._issued.popitem(last=False)
+        return _Session(key=session_key(raw), ref=session_ref(raw), issued=True)
 
-        Session mode only. Without this, an expired id would silently get a
-        fresh, untainted session. In audit mode the rejection is logged and the
-        id is allowed to start over.
-        """
-        if self.config.mode != "session":
-            return
+    def _check_session(
+        self, data: dict, request_id: str, owner: str, messages: list[dict], phase: str
+    ) -> _Session:
+        """Resolve the request's session or raise _SessionViolation."""
+        issued_raw = self._issued.get(request_id)
+        if issued_raw is not None:  # post-call of the request that started the session
+            raw = issued_raw
+        else:
+            raw = _session_header(data)
+            if raw is None:
+                if phase != "pre_call":
+                    raise _SessionViolation("missing", f"{SESSION_HEADER} is required")
+                if not _is_session_start(messages):
+                    raise _SessionViolation(
+                        "start_with_history",
+                        f"a new session may contain only system and user messages; "
+                        f"send the {SESSION_HEADER} issued for this run",
+                    )
+                return self._issue_session(request_id, owner)
+            if not is_well_formed(raw):
+                raise _SessionViolation(
+                    "malformed",
+                    f"{SESSION_HEADER} is not a session id issued by this proxy",
+                    header_length=len(raw),
+                )
+        key = session_key(raw)
         try:
-            get_store().state(session_id)
+            get_store().authorize(key, owner)
         except SessionExpired as exc:
+            raise _SessionViolation(
+                "expired", str(exc), ref=session_ref(raw), expired_reason=exc.reason
+            ) from exc
+        except SessionError as exc:
+            raise _SessionViolation(exc.reason, str(exc), ref=session_ref(raw)) from exc
+        return _Session(key=key, ref=session_ref(raw))
+
+    def _resolve_session(
+        self,
+        data: dict,
+        request_id: str,
+        user_api_key_dict: Any,
+        messages: list[dict],
+        phase: str,
+    ) -> _Session:
+        """Enforce the session contract. Violations are logged and rejected.
+
+        In audit mode (ROUTER_ENFORCE=false) a violation is logged and the
+        request continues in a newly issued session.
+        """
+        owner = _api_key_owner(user_api_key_dict)
+        try:
+            return self._check_session(data, request_id, owner, messages, phase)
+        except _SessionViolation as exc:
             self.decision_logger.emit(
                 {
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "phase": phase,
-                    "session_id": session_id,
+                    "session_id": exc.ref,
                     "request_id": request_id,
                     "mode": self.config.mode,
                     "level": self.config.level,
-                    "features": {"session_expired": exc.reason},
+                    "features": {"session_violation": exc.reason, **exc.detail},
                     "risk_score": 1.0,
                     "action": "block",
-                    "matched_rules": ["session_expired"],
+                    "matched_rules": [f"session_{exc.reason}"],
                     "enforce": self.config.enforce,
                 }
             )
             if not self.config.enforce:
-                get_store().reopen(session_id)
-                return
+                return self._issue_session(request_id, owner)
             import litellm.exceptions as _le
 
             raise _le.BadRequestError(
@@ -128,6 +226,18 @@ class RouterHook(CustomLogger):
                 model=data.get("model", ""),
                 llm_provider="",
             ) from exc
+
+    async def async_post_call_response_headers_hook(
+        self,
+        data: dict,
+        user_api_key_dict: Any,
+        response: Any,
+        request_headers: dict[str, str] | None = None,
+        litellm_call_info: dict[str, object] | None = None,
+    ) -> dict[str, str] | None:
+        """Return a newly issued session id to the client — the only time it is sent."""
+        raw = self._issued.pop(data.get("litellm_call_id") or "", None)
+        return {SESSION_HEADER: raw} if raw else None
 
     async def async_pre_call_hook(
         self,
@@ -138,10 +248,10 @@ class RouterHook(CustomLogger):
     ) -> dict:
         t0 = time.perf_counter()
 
-        request_id = data.get("litellm_call_id") or str(uuid.uuid4())
-        session_id = _derive_session_id(data, request_id)
+        request_id = data.setdefault("litellm_call_id", str(uuid.uuid4()))
         messages = data.get("messages", [])
-        self._session_gate(session_id, request_id, "pre_call", data)
+        session = self._resolve_session(data, request_id, user_api_key_dict, messages, "pre_call")
+        session_id = session.key
 
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
         features["streaming_tool_request"] = bool(data.get("stream") and data.get("tools"))
@@ -225,7 +335,8 @@ class RouterHook(CustomLogger):
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "phase": "pre_call",
-                "session_id": session_id,
+                "session_id": session.ref,
+                "session_issued": session.issued,
                 "request_id": request_id,
                 "mode": self.config.mode,
                 "level": self.config.level,
@@ -281,13 +392,13 @@ class RouterHook(CustomLogger):
         run after content has already reached the client.
         """
         request_id = data.get("litellm_call_id") or ""
-        session_id = _derive_session_id(data, request_id)
         messages = data.get("messages", [])
 
         egress_sinks = _extract_response_sinks(response)
         if not egress_sinks:
             return None
-        self._session_gate(session_id, request_id, "post_call", data)
+        session = self._resolve_session(data, request_id, user_api_key_dict, messages, "post_call")
+        session_id = session.key
 
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
         features["sink_requested"] = True
@@ -343,7 +454,7 @@ class RouterHook(CustomLogger):
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "phase": "post_call",
-                "session_id": session_id,
+                "session_id": session.ref,
                 "request_id": request_id,
                 "mode": self.config.mode,
                 "level": self.config.level,

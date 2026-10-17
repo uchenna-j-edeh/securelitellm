@@ -4,6 +4,13 @@ Two history modes:
   incremental  Each turn sends ONLY its own messages.  The session store
                accumulates taint via x-agent-run-id, but stateless routing
                never sees cross-turn context.  This is the baseline.
+
+Sessions are issued by the proxy (#145). Each replay first opens a session the
+way a real agent does — a request carrying only the scenario's leading user
+message — reads the issued id from the x-agent-run-id response header, and
+sends it with every turn. Corpus turns compress a whole agent step (user →
+tool call → tool result) into one request, so they cannot open a session
+themselves: the proxy rejects a new session that already contains tool turns.
   full         Each turn sends ALL prior turns' messages prepended to its own,
                mirroring how a real agent maintains conversation context.
                Stateless routing can then detect cross-turn attacks because the
@@ -31,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from corpus.validate import Scenario
 from harness.decisions import current_log_size, wait_for_decision
+from router.session import session_ref
 
 # Load deploy/.env so LITELLM_MASTER_KEY is available when run standalone
 _ENV_FILE = Path(__file__).parent.parent / "deploy" / ".env"
@@ -49,6 +57,8 @@ LITELLM_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "")
 # the proxy hook, not the model's reply, so mock removes Groq latency/rate-limits.
 DEFAULT_MODEL = os.environ.get("HARNESS_MODEL", "groq/llama-3.1-8b-instant")
 REQUEST_TIMEOUT = 30
+SESSION_HEADER = "x-agent-run-id"
+_SESSION_START_ROLES = {"system", "developer", "user"}
 
 
 @dataclass
@@ -92,34 +102,55 @@ def _messages_to_api(turn_messages: list) -> list[dict]:
     return out
 
 
-def _post_turn(session_id: str, messages: list[dict]) -> tuple[bool, float]:
-    """POST one turn to the proxy. Returns (ok, wall_ms)."""
+def _post_turn(
+    messages: list[dict], session_id: str | None = None
+) -> tuple[bool, float, str | None]:
+    """POST one turn to the proxy. Returns (ok, wall_ms, issued session id or None)."""
     import json
 
     payload = json.dumps({"model": DEFAULT_MODEL, "messages": messages}).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LITELLM_MASTER_KEY}",
+    }
+    if session_id:
+        headers[SESSION_HEADER] = session_id
 
     req = urllib.request.Request(
         f"{PROXY_URL}/chat/completions",
         data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {LITELLM_MASTER_KEY}",
-            "x-agent-run-id": session_id,
-        },
+        headers=headers,
         method="POST",
     )
     t0 = time.perf_counter()
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT):
-            pass
-        return True, (time.perf_counter() - t0) * 1000
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            issued = resp.headers.get(SESSION_HEADER)
+        return True, (time.perf_counter() - t0) * 1000, issued
     except urllib.error.HTTPError as exc:
         # 400/403 from block/strip-tools — proxy acted, still a valid decision
+        issued = exc.headers.get(SESSION_HEADER) if exc.headers else None
         if exc.code in (400, 403):
-            return True, (time.perf_counter() - t0) * 1000
-        return False, (time.perf_counter() - t0) * 1000
+            return True, (time.perf_counter() - t0) * 1000, issued
+        return False, (time.perf_counter() - t0) * 1000, issued
     except Exception:
-        return False, (time.perf_counter() - t0) * 1000
+        return False, (time.perf_counter() - t0) * 1000, None
+
+
+def _opening_messages(first_turn: list[dict]) -> list[dict]:
+    """The leading system/user messages of a scenario — what a real agent's first request holds."""
+    opening = []
+    for m in first_turn:
+        if m.get("role") not in _SESSION_START_ROLES:
+            break
+        opening.append(m)
+    return opening or [{"role": "user", "content": "start"}]
+
+
+def _open_session(first_turn: list[dict]) -> str | None:
+    """Start a proxy session; return the issued x-agent-run-id (None on failure)."""
+    _, _, issued = _post_turn(_opening_messages(first_turn))
+    return issued
 
 
 def replay_scenario(
@@ -133,9 +164,12 @@ def replay_scenario(
     history_mode="full": each turn sends all prior turns' messages prepended,
         mirroring a real agent that maintains full conversation context.
     """
-    session_id = f"{scenario.id}-s{seed}-{history_mode}"
+    run_label = f"{scenario.id}-s{seed}-{history_mode}"
     results: list[TurnResult] = []
     accumulated: list[dict] = []  # grows turn-by-turn in full mode
+
+    session_id = _open_session(_messages_to_api(scenario.turns[0].messages))
+    ref = session_ref(session_id) if session_id else None
 
     for idx, turn in enumerate(scenario.turns):
         before_byte = current_log_size()
@@ -146,10 +180,10 @@ def replay_scenario(
         else:
             messages = turn_messages
 
-        ok, wall_ms = _post_turn(session_id, messages)
+        ok, wall_ms, _ = _post_turn(messages, session_id)
         accumulated.extend(turn_messages)
 
-        decision = wait_for_decision(session_id, after_byte=before_byte) if ok else None
+        decision = wait_for_decision(ref, after_byte=before_byte) if ok and ref else None
 
         tr = TurnResult(
             scenario_id=scenario.id,
@@ -158,7 +192,7 @@ def replay_scenario(
             turn_name=turn.name,
             turn_index=idx,
             is_attack_turn=turn.is_attack_turn,
-            session_id=session_id,
+            session_id=run_label,
             seed=seed,
             history_mode=history_mode,
             proxy_ok=ok,

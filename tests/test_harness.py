@@ -65,6 +65,52 @@ def test_turn_result_defaults():
     assert tr.proxy_ok is True
 
 
+def test_opening_messages_keeps_leading_user_turns_only():
+    from harness.runner import _opening_messages
+
+    turn = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "do it"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "evil"},
+        {"role": "user", "content": "later"},
+    ]
+    assert _opening_messages(turn) == turn[:2]
+    assert _opening_messages([turn[3]]) == [{"role": "user", "content": "start"}]
+
+
+def test_replay_opens_session_then_sends_issued_id(monkeypatch):
+    """Replay opens a session first and sends the proxy-issued id with every turn."""
+    from harness import runner
+    from router.session import session_ref
+
+    sc = runner.load_scenario(Path("corpus/scenarios/sc-010.yaml"))
+    calls: list[tuple[list[dict], str | None]] = []
+    issued = "A" * 43
+
+    def fake_post(messages, session_id=None):
+        calls.append((messages, session_id))
+        return True, 1.0, None if session_id else issued
+
+    seen_refs = []
+    monkeypatch.setattr(runner, "_post_turn", fake_post)
+    monkeypatch.setattr(runner, "current_log_size", lambda: 0)
+    monkeypatch.setattr(
+        runner,
+        "wait_for_decision",
+        lambda ref, after_byte: seen_refs.append(ref) or {"action": "allow", "risk_score": 0.0},
+    )
+
+    results = runner.replay_scenario(sc, seed=0)
+
+    opening, *turns = calls
+    assert opening[1] is None
+    assert all(m["role"] in ("system", "user") for m in opening[0])
+    assert [sid for _, sid in turns] == [issued] * len(sc.turns)
+    assert seen_refs == [session_ref(issued)] * len(sc.turns)
+    assert [r.session_id for r in results] == ["sc-010-s0-incremental"] * len(sc.turns)
+
+
 # ── metrics ──────────────────────────────────────────────────────────────────
 
 from eval.metrics import build_counters, classify_row, compute_metrics, wilson_ci  # noqa: E402

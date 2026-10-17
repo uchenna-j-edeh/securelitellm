@@ -87,18 +87,22 @@ async def test_decision_record_values(hook, log_path, base_data):
 
 
 @pytest.mark.asyncio
-async def test_session_id_from_header(hook, log_path, base_data):
-    base_data["metadata"]["headers"]["x-agent-run-id"] = "run-abc-123"
+async def test_session_ref_from_issued_header(hook, log_path, base_data):
+    from tests._sessions import issued, ref
+
+    base_data["metadata"]["headers"]["x-agent-run-id"] = issued("run-abc-123")
     await call_hook(hook, base_data)
     record = _request_records(log_path)[0]
-    assert record["session_id"] == "run-abc-123"
+    assert record["session_id"] == ref("run-abc-123")
+    assert issued("run-abc-123") not in Path(log_path).read_text()
 
 
 @pytest.mark.asyncio
-async def test_session_id_fallback_when_no_header(hook, log_path, base_data):
+async def test_no_header_issues_new_session(hook, log_path, base_data):
     await call_hook(hook, base_data)
     record = _request_records(log_path)[0]
-    assert record["session_id"].startswith("no-session-")
+    assert record["session_issued"] is True
+    assert len(record["session_id"]) == 16
 
 
 @pytest.mark.asyncio
@@ -113,6 +117,7 @@ async def test_multiple_requests_append_records(hook, log_path, base_data):
 @pytest.mark.asyncio
 async def test_tool_context_captured(hook, log_path):
     from router.classifiers.base import BaseClassifier, ClassifierResult
+    from tests._sessions import issued
 
     class _FakeClassifier(BaseClassifier):
         async def classify(self, text: str) -> ClassifierResult:
@@ -136,7 +141,7 @@ async def test_tool_context_captured(hook, log_path):
                 ],
             },
         ],
-        "metadata": {"headers": {}},
+        "metadata": {"headers": {"x-agent-run-id": issued("tool-run")}},
     }
     await call_hook(hook, data)
     record = _request_records(log_path)[0]

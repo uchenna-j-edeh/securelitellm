@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from router.classifiers.base import BaseClassifier, ClassifierResult
+from tests._sessions import issued, key, ref
 
 
 class _FakeInjectionClassifier(BaseClassifier):
@@ -90,7 +91,7 @@ async def pre_call(hook, data):
 
 
 def make_data(messages, session_id=None, call_id="req-1"):
-    headers = {"x-agent-run-id": session_id} if session_id else {}
+    headers = {"x-agent-run-id": issued(session_id)} if session_id else {}
     return {"litellm_call_id": call_id, "messages": messages, "metadata": {"headers": headers}}
 
 
@@ -121,14 +122,18 @@ def make_response(name="send_email", arguments="{}"):
 async def test_session_id_from_header(hook_session, log_path):
     data = make_data([{"role": "user", "content": "hi"}], session_id="run-abc")
     await pre_call(hook_session, data)
-    assert read_record(log_path)["session_id"] == "run-abc"
+    record = read_record(log_path)
+    assert record["session_id"] == ref("run-abc")
+    assert record["session_issued"] is False
 
 
 @pytest.mark.asyncio
-async def test_session_id_fallback(hook_session, log_path):
+async def test_no_header_starts_a_new_session(hook_session, log_path):
     data = make_data([{"role": "user", "content": "hi"}])
     await pre_call(hook_session, data)
-    assert read_record(log_path)["session_id"].startswith("no-session-")
+    record = read_record(log_path)
+    assert record["session_issued"] is True
+    assert len(record["session_id"]) == 16
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +156,8 @@ async def test_stateless_source_seen(hook_stateless, log_path):
         [
             {"role": "user", "content": "search"},
             {"role": "tool", "tool_call_id": "c1", "content": "evil payload"},
-        ]
+        ],
+        session_id="stateless-src",
     )
     await pre_call(hook_stateless, data)
     f = read_record(log_path)["features"]
@@ -172,7 +178,8 @@ async def test_stateless_sink_requested(hook_stateless, log_path):
                     }
                 ],
             },
-        ]
+        ],
+        session_id="stateless-sink",
     )
     await pre_call(hook_stateless, data)
     f = read_record(log_path)["features"]
@@ -269,14 +276,14 @@ async def test_post_call_records_sink_in_session(hook_session, monkeypatch):
     store = sess_mod.get_store()
 
     # First taint the session
-    store.record_source("run-post", {"tool_call_id": "c1", "content": "injected"})
+    store.record_source(key("run-post"), {"tool_call_id": "c1", "content": "injected"})
 
     response = make_response(arguments='{"to":"evil@x.com"}')
 
     data = make_data([], session_id="run-post")
     await hook_session.async_post_call_success_hook(MagicMock(), data, response)
 
-    state = store.state("run-post")
+    state = store.state(key("run-post"))
     assert len(state.sinks) == 1
     assert state.sinks[0]["name"] == "send_email"
     assert state.sinks[0]["category"] == "exfil"
@@ -293,8 +300,9 @@ async def test_post_call_noop_in_stateless_mode(hook_stateless, monkeypatch):
     data = make_data([], session_id="run-stateless")
     await hook_stateless.async_post_call_success_hook(MagicMock(), data, response)
 
-    # Stateless mode never creates persistent session state.
-    assert store._store.get("run-stateless") is None
+    # Stateless mode issues ids but never records taint state.
+    state = store.state(key("run-stateless"))
+    assert state.sinks == [] and state.sources == [] and state.tainted is False
 
 
 @pytest.mark.asyncio
@@ -378,8 +386,132 @@ async def test_streaming_request_with_tools_is_blocked(hook_enforcing):
 
 
 # ---------------------------------------------------------------------------
-# Expired session ids are rejected, not recreated (#147)
+# Session contract: proxy-issued ids (#145, #146, #147)
 # ---------------------------------------------------------------------------
+
+
+async def _headers(hook, data, api_key=None):
+    return await hook.async_post_call_response_headers_hook(
+        data, api_key or MagicMock(), MagicMock()
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_session_id_returned_once_in_response_header(hook_enforcing, log_path):
+    import router.session as sess_mod
+    from router.session import is_well_formed, session_key, session_ref
+
+    data = make_data([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}])
+    await pre_call(hook_enforcing, data)
+
+    headers = await _headers(hook_enforcing, data)
+    raw = headers["x-agent-run-id"]
+    assert is_well_formed(raw)
+    assert sess_mod.get_store().state(session_key(raw)) is not None
+    assert read_record(log_path)["session_id"] == session_ref(raw)
+    assert await _headers(hook_enforcing, data) is None  # sent once only
+
+
+@pytest.mark.asyncio
+async def test_issued_id_is_accepted_on_later_requests(hook_enforcing, log_path):
+    from router.session import session_ref
+
+    first = make_data([{"role": "user", "content": "hi"}], call_id="req-1")
+    await pre_call(hook_enforcing, first)
+    raw = (await _headers(hook_enforcing, first))["x-agent-run-id"]
+
+    later = {
+        "litellm_call_id": "req-2",
+        "messages": [{"role": "tool", "tool_call_id": "c1", "content": "page"}],
+        "metadata": {"headers": {"x-agent-run-id": raw}},
+    }
+    await pre_call(hook_enforcing, later)
+    record = read_record(log_path, n=1)
+    assert record["session_id"] == session_ref(raw)
+    assert record["session_issued"] is False
+    assert await _headers(hook_enforcing, later) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "history",
+    [
+        [{"role": "tool", "tool_call_id": "c1", "content": "evil"}],
+        [{"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}]}],
+        [{"role": "assistant", "content": "earlier answer"}],
+        [{"role": "function", "name": "f", "content": "evil"}],
+    ],
+    ids=["tool-result", "tool-call", "assistant-text", "legacy-function"],
+)
+async def test_new_session_with_prior_turns_is_rejected(hook_enforcing, log_path, history):
+    import litellm.exceptions as _le
+
+    import router.session as sess_mod
+
+    data = make_data([{"role": "user", "content": "go"}, *history])
+    with pytest.raises(_le.BadRequestError, match="new session"):
+        await pre_call(hook_enforcing, data)
+
+    record = read_record(log_path)
+    assert record["action"] == "block"
+    assert record["matched_rules"] == ["session_start_with_history"]
+    assert sess_mod.get_store()._store == {}  # nothing issued
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    ["", " ", "run-abc-123", "a" * 42, "a" * 44, "a" * 42 + "!", " " + "a" * 43, "a" * 200],
+    ids=["empty", "space", "client-chosen", "short", "long", "bad-char", "padded", "huge"],
+)
+async def test_malformed_session_header_is_rejected(hook_enforcing, log_path, value):
+    import litellm.exceptions as _le
+
+    data = make_data([{"role": "user", "content": "hi"}])
+    data["metadata"]["headers"]["x-agent-run-id"] = value
+    with pytest.raises(_le.BadRequestError, match="not a session id"):
+        await pre_call(hook_enforcing, data)
+
+    record = read_record(log_path)
+    assert record["matched_rules"] == ["session_malformed"]
+    assert record["features"]["header_length"] == len(value)
+    if value.strip():
+        assert value not in Path(log_path).read_text()
+
+
+@pytest.mark.asyncio
+async def test_unknown_session_id_is_rejected(hook_enforcing, log_path):
+    import secrets
+
+    import litellm.exceptions as _le
+
+    forged = secrets.token_urlsafe(32)
+    data = make_data([{"role": "user", "content": "hi"}])
+    data["metadata"]["headers"]["x-agent-run-id"] = forged
+    with pytest.raises(_le.BadRequestError, match="not a session issued"):
+        await pre_call(hook_enforcing, data)
+
+    assert read_record(log_path)["matched_rules"] == ["session_unknown"]
+    assert forged not in Path(log_path).read_text()
+
+
+@pytest.mark.asyncio
+async def test_session_bound_to_issuing_api_key(hook_enforcing, log_path):
+    import litellm.exceptions as _le
+
+    raw = issued("owned", owner="key-a")
+    data = make_data([{"role": "user", "content": "hi"}], call_id="req-1")
+    data["metadata"]["headers"]["x-agent-run-id"] = raw
+
+    await hook_enforcing.async_pre_call_hook(
+        SimpleNamespace(token="key-a"), MagicMock(), data, "completion"
+    )
+    data["litellm_call_id"] = "req-2"
+    with pytest.raises(_le.BadRequestError, match="different API key"):
+        await hook_enforcing.async_pre_call_hook(
+            SimpleNamespace(token="key-b"), MagicMock(), data, "completion"
+        )
+    assert read_record(log_path, n=1)["matched_rules"] == ["session_owner_mismatch"]
 
 
 @pytest.mark.asyncio
@@ -390,7 +522,7 @@ async def test_expired_session_id_is_rejected(hook_enforcing, log_path):
 
     data = make_data([{"role": "user", "content": "hi"}], session_id="old-run")
     await pre_call(hook_enforcing, data)
-    sess_mod.get_store().expire("old-run", reason="idle")
+    sess_mod.get_store().expire(key("old-run"), reason="idle")
 
     with pytest.raises(_le.BadRequestError, match="expired"):
         await pre_call(hook_enforcing, make_data([], session_id="old-run", call_id="req-2"))
@@ -398,7 +530,8 @@ async def test_expired_session_id_is_rejected(hook_enforcing, log_path):
     record = read_record(log_path, n=1)
     assert record["action"] == "block"
     assert record["matched_rules"] == ["session_expired"]
-    assert record["features"] == {"session_expired": "idle"}
+    assert record["features"] == {"session_violation": "expired", "expired_reason": "idle"}
+    assert record["session_id"] == ref("old-run")
 
 
 @pytest.mark.asyncio
@@ -409,7 +542,7 @@ async def test_expired_session_id_rejected_in_post_call(hook_enforcing, log_path
 
     data = make_data([{"role": "user", "content": "hi"}], session_id="mid-run")
     await pre_call(hook_enforcing, data)
-    sess_mod.get_store().expire("mid-run", reason="idle")
+    sess_mod.get_store().expire(key("mid-run"), reason="idle")
 
     with pytest.raises(_le.BadRequestError, match="expired"):
         await hook_enforcing.async_post_call_success_hook(MagicMock(), data, make_response())
@@ -417,28 +550,43 @@ async def test_expired_session_id_rejected_in_post_call(hook_enforcing, log_path
 
 
 @pytest.mark.asyncio
-async def test_expired_session_audit_mode_logs_and_starts_over(hook_session, log_path):
+async def test_post_call_uses_session_issued_by_same_request(hook_enforcing, log_path):
+    data = make_data([{"role": "user", "content": "Email my report"}], call_id="start")
+    await pre_call(hook_enforcing, data)
+    result = await hook_enforcing.async_post_call_success_hook(
+        MagicMock(), data, make_response(arguments='{"to":"owner@example.com"}')
+    )
+    assert result is None
+    pre, post = read_record(log_path, n=0), read_record(log_path, n=1)
+    assert post["phase"] == "post_call"
+    assert post["session_id"] == pre["session_id"]
+
+
+@pytest.mark.asyncio
+async def test_audit_mode_logs_violation_and_issues_new_session(hook_session, log_path):
     import router.session as sess_mod
 
     store = sess_mod.get_store()
-    store.record_source("audit-run", {"tool_call_id": "c1", "content": "evil"})
-    store.expire("audit-run", reason="idle")
+    store.record_source(key("audit-run"), {"tool_call_id": "c1", "content": "evil"})
+    store.expire(key("audit-run"), reason="idle")
 
     data = make_data([{"role": "user", "content": "hi"}], session_id="audit-run")
     result = await pre_call(hook_session, data)
 
     assert result is not None
-    assert read_record(log_path)["matched_rules"] == ["session_expired"]
-    assert store.state("audit-run").tainted is False
+    violation, decision = read_record(log_path, n=0), read_record(log_path, n=1)
+    assert violation["matched_rules"] == ["session_expired"]
+    assert decision["session_issued"] is True
+    assert decision["features"]["untrusted_seen"] is False
+    assert (await _headers(hook_session, data))["x-agent-run-id"] != issued("audit-run")
 
 
 @pytest.mark.asyncio
-async def test_stateless_mode_ignores_session_expiry(hook_stateless):
-    import router.session as sess_mod
-
-    sess_mod.get_store().expire("stateless-run")
-    data = make_data([{"role": "user", "content": "hi"}], session_id="stateless-run")
-    assert await pre_call(hook_stateless, data) is not None
+async def test_stateless_mode_issues_session_ids_too(hook_stateless, log_path):
+    data = make_data([{"role": "user", "content": "hi"}])
+    await pre_call(hook_stateless, data)
+    assert read_record(log_path)["session_issued"] is True
+    assert "x-agent-run-id" in await _headers(hook_stateless, data)
 
 
 @pytest.mark.asyncio
@@ -470,4 +618,4 @@ async def test_malformed_local_classifier_response_fails_closed(hook_enforcing, 
     record = read_record(log_path)
     assert record["action"] == "strip-tools"
     assert "classifier_injection" in record["matched_rules"]
-    assert sess_mod.get_store().state("malformed").tainted
+    assert sess_mod.get_store().state(key("malformed")).tainted
