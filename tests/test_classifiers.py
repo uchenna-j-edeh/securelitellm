@@ -245,6 +245,112 @@ class TestPromptGuardClassifier:
 
 
 # ---------------------------------------------------------------------------
+# LocalClassifier — strict sidecar contract (#102)
+# ---------------------------------------------------------------------------
+
+
+def _local_sidecar(body=None, *, json_error: bool = False):
+    """Patch httpx.AsyncClient so the sidecar returns 200 with `body`."""
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    if json_error:
+        resp.json.side_effect = ValueError("Expecting value")
+    else:
+        resp.json.return_value = body
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=resp)
+    return patch("httpx.AsyncClient", return_value=mock_client)
+
+
+_MALFORMED_BODIES = [
+    pytest.param({}, id="empty-object"),
+    pytest.param({"score": 0.01}, id="missing-label"),
+    pytest.param({"label": "SAFE", "score": 0.01}, id="unknown-label"),
+    pytest.param({"label": "", "score": 0.01}, id="empty-label"),
+    pytest.param({"label": "NOT_INJECTION", "score": 0.01}, id="substring-label"),
+    pytest.param({"label": None, "score": 0.01}, id="null-label"),
+    pytest.param({"label": 1, "score": 0.01}, id="non-string-label"),
+    pytest.param({"label": "BENIGN"}, id="missing-score"),
+    pytest.param({"label": "BENIGN", "score": "0.01"}, id="string-score"),
+    pytest.param({"label": "BENIGN", "score": True}, id="bool-score"),
+    pytest.param({"label": "BENIGN", "score": 1.5}, id="score-above-1"),
+    pytest.param({"label": "BENIGN", "score": -0.1}, id="score-below-0"),
+    pytest.param({"label": "BENIGN", "score": float("nan")}, id="nan-score"),
+    pytest.param([{"label": "BENIGN", "score": 0.01}], id="json-list"),
+    pytest.param("BENIGN", id="json-string"),
+]
+
+
+class TestLocalClassifier:
+    @pytest.mark.parametrize(
+        ("body", "label"),
+        [
+            ({"label": "INJECTION", "score": 0.97}, "INJECTION"),
+            ({"label": "BENIGN", "score": 0.02}, "BENIGN"),
+            ({"label": " benign ", "score": 0}, "BENIGN"),
+        ],
+    )
+    def test_valid_response_parses(self, body, label):
+        from router.classifiers.local import LocalClassifier
+
+        with _local_sidecar({**body, "model": "deberta"}):
+            result = asyncio.run(LocalClassifier(base_url="http://x").classify("t"))
+        assert result.label == label
+        assert result.score == body["score"]
+        assert result.model == "deberta"
+
+    @pytest.mark.parametrize("body", _MALFORMED_BODIES)
+    def test_malformed_response_raises(self, body):
+        from router.classifiers.local import LocalClassifier, MalformedClassifierResponse
+
+        with _local_sidecar(body):
+            with pytest.raises(MalformedClassifierResponse):
+                asyncio.run(LocalClassifier(base_url="http://x").classify("t"))
+
+    def test_non_json_body_raises(self):
+        from router.classifiers.local import LocalClassifier, MalformedClassifierResponse
+
+        with _local_sidecar(json_error=True):
+            with pytest.raises(MalformedClassifierResponse):
+                asyncio.run(LocalClassifier(base_url="http://x").classify("t"))
+
+    @pytest.mark.parametrize("body", _MALFORMED_BODIES)
+    def test_malformed_response_fails_closed(self, body):
+        from router.classifiers.local import LocalClassifier
+
+        clf = LocalClassifier(base_url="http://x")
+        with _local_sidecar(body):
+            result = asyncio.run(clf.safe_classify("t"))
+        verdict = clf.to_verdict(result)
+        assert verdict["label"] == "INJECTION"
+        assert verdict["score"] == 1.0
+        assert verdict["model"] == "error:MalformedClassifierResponse"
+
+    def test_non_string_model_falls_back(self):
+        from router.classifiers.local import LocalClassifier
+
+        with _local_sidecar({"label": "BENIGN", "score": 0.01, "model": 42}):
+            result = asyncio.run(LocalClassifier(base_url="http://x").classify("t"))
+        assert result.model == "local"
+
+    def test_malformed_response_not_cached(self):
+        from router.classifiers.local import LocalClassifier
+
+        clf = CachedClassifier(LocalClassifier(base_url="http://x"))
+        with _local_sidecar({"label": "SAFE", "score": 0.01}):
+            first = asyncio.run(clf.safe_classify("same text"))
+        assert first.model == "error:MalformedClassifierResponse"
+        assert clf.cache_size() == 0
+
+        with _local_sidecar({"label": "BENIGN", "score": 0.01, "model": "deberta"}):
+            second = asyncio.run(clf.safe_classify("same text"))
+        assert second.label == "BENIGN"
+        assert second.cached is False
+
+
+# ---------------------------------------------------------------------------
 # Factory (get_classifier)
 # ---------------------------------------------------------------------------
 
