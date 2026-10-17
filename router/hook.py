@@ -24,7 +24,7 @@ from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
 from router.policy import PolicyEngine, PolicyViolation
-from router.session import get_store
+from router.session import SessionExpired, get_store
 from router.taint import (
     classify_sinks,
     classify_sources,
@@ -91,6 +91,44 @@ class RouterHook(CustomLogger):
         self._policy = PolicyEngine.from_yaml(self.config.policy_path or None)
         self.decision_logger.emit(self.config.startup_record())
 
+    def _session_gate(self, session_id: str, request_id: str, phase: str, data: dict) -> None:
+        """Reject requests that reuse an expired or ended session id (#147).
+
+        Session mode only. Without this, an expired id would silently get a
+        fresh, untainted session. In audit mode the rejection is logged and the
+        id is allowed to start over.
+        """
+        if self.config.mode != "session":
+            return
+        try:
+            get_store().state(session_id)
+        except SessionExpired as exc:
+            self.decision_logger.emit(
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "phase": phase,
+                    "session_id": session_id,
+                    "request_id": request_id,
+                    "mode": self.config.mode,
+                    "level": self.config.level,
+                    "features": {"session_expired": exc.reason},
+                    "risk_score": 1.0,
+                    "action": "block",
+                    "matched_rules": ["session_expired"],
+                    "enforce": self.config.enforce,
+                }
+            )
+            if not self.config.enforce:
+                get_store().reopen(session_id)
+                return
+            import litellm.exceptions as _le
+
+            raise _le.BadRequestError(
+                message=f"SecureLiteLLM: {exc}",
+                model=data.get("model", ""),
+                llm_provider="",
+            ) from exc
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: Any,
@@ -103,6 +141,7 @@ class RouterHook(CustomLogger):
         request_id = data.get("litellm_call_id") or str(uuid.uuid4())
         session_id = _derive_session_id(data, request_id)
         messages = data.get("messages", [])
+        self._session_gate(session_id, request_id, "pre_call", data)
 
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
         features["streaming_tool_request"] = bool(data.get("stream") and data.get("tools"))
@@ -248,6 +287,7 @@ class RouterHook(CustomLogger):
         egress_sinks = _extract_response_sinks(response)
         if not egress_sinks:
             return None
+        self._session_gate(session_id, request_id, "post_call", data)
 
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
         features["sink_requested"] = True

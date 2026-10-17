@@ -377,6 +377,70 @@ async def test_streaming_request_with_tools_is_blocked(hook_enforcing):
         await pre_call(hook_enforcing, data)
 
 
+# ---------------------------------------------------------------------------
+# Expired session ids are rejected, not recreated (#147)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_expired_session_id_is_rejected(hook_enforcing, log_path):
+    import litellm.exceptions as _le
+
+    import router.session as sess_mod
+
+    data = make_data([{"role": "user", "content": "hi"}], session_id="old-run")
+    await pre_call(hook_enforcing, data)
+    sess_mod.get_store().expire("old-run", reason="idle")
+
+    with pytest.raises(_le.BadRequestError, match="expired"):
+        await pre_call(hook_enforcing, make_data([], session_id="old-run", call_id="req-2"))
+
+    record = read_record(log_path, n=1)
+    assert record["action"] == "block"
+    assert record["matched_rules"] == ["session_expired"]
+    assert record["features"] == {"session_expired": "idle"}
+
+
+@pytest.mark.asyncio
+async def test_expired_session_id_rejected_in_post_call(hook_enforcing, log_path):
+    import litellm.exceptions as _le
+
+    import router.session as sess_mod
+
+    data = make_data([{"role": "user", "content": "hi"}], session_id="mid-run")
+    await pre_call(hook_enforcing, data)
+    sess_mod.get_store().expire("mid-run", reason="idle")
+
+    with pytest.raises(_le.BadRequestError, match="expired"):
+        await hook_enforcing.async_post_call_success_hook(MagicMock(), data, make_response())
+    assert read_record(log_path, n=1)["matched_rules"] == ["session_expired"]
+
+
+@pytest.mark.asyncio
+async def test_expired_session_audit_mode_logs_and_starts_over(hook_session, log_path):
+    import router.session as sess_mod
+
+    store = sess_mod.get_store()
+    store.record_source("audit-run", {"tool_call_id": "c1", "content": "evil"})
+    store.expire("audit-run", reason="idle")
+
+    data = make_data([{"role": "user", "content": "hi"}], session_id="audit-run")
+    result = await pre_call(hook_session, data)
+
+    assert result is not None
+    assert read_record(log_path)["matched_rules"] == ["session_expired"]
+    assert store.state("audit-run").tainted is False
+
+
+@pytest.mark.asyncio
+async def test_stateless_mode_ignores_session_expiry(hook_stateless):
+    import router.session as sess_mod
+
+    sess_mod.get_store().expire("stateless-run")
+    data = make_data([{"role": "user", "content": "hi"}], session_id="stateless-run")
+    assert await pre_call(hook_stateless, data) is not None
+
+
 @pytest.mark.asyncio
 async def test_malformed_local_classifier_response_fails_closed(hook_enforcing, log_path):
     """#102: a 200 reply outside the sidecar contract strips tools and taints the session."""
