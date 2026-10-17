@@ -375,3 +375,35 @@ async def test_streaming_request_with_tools_is_blocked(hook_enforcing):
 
     with pytest.raises(_le.BadRequestError):
         await pre_call(hook_enforcing, data)
+
+
+@pytest.mark.asyncio
+async def test_malformed_local_classifier_response_fails_closed(hook_enforcing, log_path):
+    """#102: a 200 reply outside the sidecar contract strips tools and taints the session."""
+    from unittest.mock import AsyncMock, patch
+
+    import router.session as sess_mod
+    from router.classifiers.cached import CachedClassifier
+    from router.classifiers.local import LocalClassifier
+
+    hook_enforcing._classifier = CachedClassifier(LocalClassifier(base_url="http://x"))
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"label": "SAFE", "score": 0.01}
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=False)
+    client.post = AsyncMock(return_value=resp)
+
+    data = make_data(
+        [{"role": "tool", "tool_call_id": "source-1", "content": "page text"}],
+        session_id="malformed",
+    )
+    data["tools"] = [{"type": "function", "function": {"name": "send_email"}}]
+    with patch("httpx.AsyncClient", return_value=client):
+        await pre_call(hook_enforcing, data)
+
+    record = read_record(log_path)
+    assert record["action"] == "strip-tools"
+    assert "classifier_injection" in record["matched_rules"]
+    assert sess_mod.get_store().state("malformed").tainted
