@@ -254,7 +254,8 @@ Expected: a JSONL decision record with all required fields:
 ```json
 {
   "ts": "...",
-  "session_id": "no-session-...",
+  "session_id": "3f9c2a71b0d4e8a2",   // session_ref: hash prefix, never the raw id
+  "session_issued": true,             // this request started a new session
   "request_id": "...",
   "phase": "pre_call",
   "mode": "session",
@@ -267,15 +268,26 @@ Expected: a JSONL decision record with all required fields:
 }
 ```
 
-### Step 9 — Session ID propagation
+### Step 9 — Proxy-issued session IDs
+
+The proxy issues session IDs; clients never choose them (NIST SP 800-63B /
+OWASP — see [ADR-008](docs/adr/ADR-008-proxy-issued-session-ids.md)). Start a
+session by sending a request **without** `x-agent-run-id`; the new ID comes back
+in the `x-agent-run-id` response header, once:
 
 ```bash
-curl http://localhost:4000/chat/completions \
+SID=$(curl -s -D - -o /dev/null http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
-  -H "x-agent-run-id: verify-run-001" \
-  -d '{"model":"mock","messages":[{"role":"user","content":"session test"}]}'
+  -d '{"model":"mock","messages":[{"role":"user","content":"session test"}]}' \
+  | awk -F': ' 'tolower($1)=="x-agent-run-id"{print $2}' | tr -d '\r')
+echo "$SID"   # 43 URL-safe characters (256 bits)
 ```
+
+Send `x-agent-run-id: $SID` on every later request of the run. The proxy
+rejects (HTTP 400) a request whose `x-agent-run-id` is malformed, was never
+issued, has expired, or belongs to a different API key — and a session-start
+request (no header) that already contains assistant or tool turns.
 
 Then check logs:
 
@@ -283,7 +295,8 @@ Then check logs:
 docker logs deploy-litellm-1 2>&1 | grep '{"ts":' | tail -1 | python3 -m json.tool
 ```
 
-Expected: `"session_id": "verify-run-001"` in the decision record.
+Expected: `"session_issued": true` and a 16-hex-character `"session_id"` — the
+`session_ref` fingerprint of the ID, never the ID itself.
 
 ### Step 10 — Tool context parsing (source + sink detection)
 
@@ -293,7 +306,7 @@ Send a multi-turn message that includes a tool result (source) and a tool call (
 curl http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ${LITELLM_MASTER_KEY}" \
-  -H "x-agent-run-id: verify-run-002" \
+  -H "x-agent-run-id: ${SID}" \
   -d '{
     "model": "mock",
     "messages": [
@@ -477,7 +490,7 @@ Each JSONL record in `harness/logs/decisions.jsonl` (or container stdout) contai
 ```jsonc
 {
   "phase": "pre_call" | "post_call",
-  "session_id": "...",            // from x-agent-run-id header
+  "session_id": "...",            // session_ref: SHA-256 prefix of the issued x-agent-run-id
   "action": "allow" | "route-hardened" | "strip-tools" | "block",
   "risk_score": 0.90,             // 0.0–1.0; threshold for block is 0.85
   "matched_rules": ["tainted_in_sink_args"],
@@ -513,7 +526,7 @@ The `demo/` directory contains a real agentic application wired through the Secu
 Browser → demo/server.py (FastAPI :8003)
               ↓  run_chat() — agentic loop
           Groq (via SecureLiteLLM proxy :4000)
-              ↓  x-agent-run-id header = session ID
+              ↓  x-agent-run-id = proxy-issued session ID
           router/hook.py — pre_call + post_call hooks
               ↓  tool results → DeBERTa classifier sidecar :8080
           Decision: allow / strip-tools / block

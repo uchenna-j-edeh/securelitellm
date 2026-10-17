@@ -187,6 +187,9 @@ file — read the real decision from `docker logs` as shown.)
   button again (it resets the session) and re-run from turn 1.
 - **Classifier 400s / every decision reads `unknown`:** the local classifier isn't up.
   `make demo-dual-up` again and wait for `local-classifier` to go `healthy`.
+- **"Session rejected by SecureLiteLLM" banner:** the proxy no longer knows the
+  session — it expired (30 min idle) or the proxy restarted. Nothing to fix: the
+  next message starts a new session automatically (history is cleared).
 - **Toggle to a clean file mid-attack:** edit `quarterly_report.txt` to match
   `annual_report.txt`; the file-backed search cache picks it up within ~5s, no restart.
 

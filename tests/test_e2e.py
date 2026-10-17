@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 import requests
 
+from router.session import is_well_formed, session_ref
+
 _BASE = os.environ.get("E2E_BASE_URL", "http://localhost:4000")
 _KEY = os.environ.get("E2E_MASTER_KEY", "sk-test-e2e-key")
 _CONTAINER = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
@@ -43,6 +45,14 @@ def _chat(
     return requests.post(
         f"{_BASE}/chat/completions", json=payload, headers=headers, timeout=_TIMEOUT
     )
+
+
+def _open_session(label: str = "start") -> tuple[str, str]:
+    """Start a proxy session; return (issued x-agent-run-id, its session_ref)."""
+    resp = _chat("mock", [{"role": "user", "content": f"open {label}"}])
+    assert resp.status_code == 200, resp.text
+    raw = resp.headers["x-agent-run-id"]
+    return raw, session_ref(raw)
 
 
 def _last_decision_records(n: int = 5) -> list[dict]:
@@ -120,12 +130,11 @@ def test_mock_model_response_shape():
 
 @pytest.mark.e2e
 def test_hook_emits_decision_record():
-    run_id = f"e2e-basic-{int(time.time())}"
-    _chat("mock", [{"role": "user", "content": "hook test"}], session_id=run_id)
+    _, ref = _open_session("hook test")
     time.sleep(0.3)  # give the hook a moment to flush to stdout
     records = _last_decision_records(20)
-    matching = [r for r in records if r.get("session_id") == run_id]
-    assert len(matching) >= 1, f"No decision record found for session {run_id}"
+    matching = [r for r in records if r.get("session_id") == ref]
+    assert len(matching) >= 1, f"No decision record found for session {ref}"
     rec = matching[-1]
     assert "features" in rec
     assert "latency_ms" in rec
@@ -134,11 +143,10 @@ def test_hook_emits_decision_record():
 
 @pytest.mark.e2e
 def test_hook_latency_under_5ms():
-    run_id = f"e2e-latency-{int(time.time())}"
-    _chat("mock", [{"role": "user", "content": "latency test"}], session_id=run_id)
+    _, ref = _open_session("latency test")
     time.sleep(0.3)
     records = _last_decision_records(20)
-    matching = [r for r in records if r.get("session_id") == run_id]
+    matching = [r for r in records if r.get("session_id") == ref]
     assert matching, "No decision record found"
     assert matching[-1]["latency_ms"] < 5.0, (
         f"Hook overhead too high: {matching[-1]['latency_ms']} ms"
@@ -152,11 +160,10 @@ def test_hook_latency_under_5ms():
 
 @pytest.mark.e2e
 def test_clean_request_no_taint():
-    run_id = f"e2e-clean-{int(time.time())}"
-    _chat("mock", [{"role": "user", "content": "What is 2+2?"}], session_id=run_id)
+    _, ref = _open_session("What is 2+2?")
     time.sleep(0.3)
     records = _last_decision_records(20)
-    matching = [r for r in records if r.get("session_id") == run_id]
+    matching = [r for r in records if r.get("session_id") == ref]
     assert matching
     features = matching[-1]["features"]
     assert features["untrusted_seen"] is False
@@ -168,7 +175,7 @@ def test_benign_tool_result_is_scanned_not_tainted():
     """Verdict-based routing: a BENIGN-classified tool result is scanned (source
     recorded) but does NOT set untrusted_seen, so clean read→send flows are not
     route-hardened. The e2e mock classifier always returns BENIGN."""
-    run_id = f"e2e-source-{int(time.time())}"
+    run_id, ref = _open_session("source")
     _chat(
         "mock",
         [
@@ -195,7 +202,7 @@ def test_benign_tool_result_is_scanned_not_tainted():
     )
     time.sleep(0.3)
     records = _last_decision_records(20)
-    matching = [r for r in records if r.get("session_id") == run_id]
+    matching = [r for r in records if r.get("session_id") == ref]
     assert matching
     feats = matching[-1]["features"]
     # Source was seen/scanned, but a BENIGN verdict does not taint the request.
@@ -209,7 +216,7 @@ def test_benign_source_with_sink_not_route_hardened():
     request is not flagged untrusted, so it is allowed (no false positive).
     Real injection detection is covered by the unit tests and corpus eval, which
     use a content-aware classifier (the e2e mock is fixed-label BENIGN)."""
-    run_id = f"e2e-inject-{int(time.time())}"
+    run_id, ref = _open_session("inject")
     _chat(
         "mock",
         [
@@ -250,7 +257,7 @@ def test_benign_source_with_sink_not_route_hardened():
     )
     time.sleep(0.3)
     records = _last_decision_records(20)
-    matching = [r for r in records if r.get("session_id") == run_id]
+    matching = [r for r in records if r.get("session_id") == ref]
     assert matching
     features = matching[-1]["features"]
     # Sink is detected structurally; BENIGN source does not taint → no false positive.
@@ -265,9 +272,8 @@ def test_benign_source_with_sink_not_route_hardened():
 
 @pytest.mark.e2e
 def test_two_sessions_are_isolated():
-    ts = int(time.time())
-    run_a = f"e2e-iso-a-{ts}"
-    run_b = f"e2e-iso-b-{ts}"
+    run_a, ref_a = _open_session("iso-a")
+    run_b, ref_b = _open_session("iso-b")
 
     # Session A: has a tool result (tainted)
     _chat(
@@ -301,8 +307,8 @@ def test_two_sessions_are_isolated():
     time.sleep(0.3)
     records = _last_decision_records(30)
 
-    rec_a = next((r for r in records if r.get("session_id") == run_a), None)
-    rec_b = next((r for r in records if r.get("session_id") == run_b), None)
+    rec_a = [r for r in records if r.get("session_id") == ref_a][-1]
+    rec_b = [r for r in records if r.get("session_id") == ref_b][-1]
 
     assert rec_a is not None and rec_b is not None
     # Both benign under the mock classifier → neither tainted. Requests are still
@@ -311,3 +317,40 @@ def test_two_sessions_are_isolated():
     assert not rec_b["features"].get("source_ids")
     assert rec_a["features"]["untrusted_seen"] is False
     assert rec_b["features"]["untrusted_seen"] is False
+
+
+# ---------------------------------------------------------------------------
+# Session contract — proxy-issued ids (#145, #146)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+def test_proxy_issues_session_id_on_first_request():
+    resp = _chat("mock", [{"role": "user", "content": "hello"}])
+    assert resp.status_code == 200
+    raw = resp.headers.get("x-agent-run-id")
+    assert raw and is_well_formed(raw)
+
+    again = _chat("mock", [{"role": "user", "content": "again"}], session_id=raw)
+    assert again.status_code == 200
+    assert "x-agent-run-id" not in again.headers  # issued once only
+
+
+@pytest.mark.e2e
+def test_client_chosen_session_id_is_rejected():
+    resp = _chat("mock", [{"role": "user", "content": "hi"}], session_id="my-own-run-1")
+    assert resp.status_code == 400
+    assert "not a session id issued" in resp.text
+
+
+@pytest.mark.e2e
+def test_new_session_with_tool_history_is_rejected():
+    resp = _chat(
+        "mock",
+        [
+            {"role": "user", "content": "go"},
+            {"role": "tool", "tool_call_id": "c1", "content": "earlier result"},
+        ],
+    )
+    assert resp.status_code == 400
+    assert "new session" in resp.text

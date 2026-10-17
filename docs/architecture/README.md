@@ -49,7 +49,7 @@ The same routing pipeline is used to generate evaluation data across all four co
 | 1 | **LiteLLM Proxy** | Host process; provides hook extension points | `async_pre_call_hook(user_api_key_dict, cache, data, call_type)`; `async_post_call_success_hook(...)` |
 | 2 | **Security Router** | Custom callback class; orchestrates the pre-call decision | Implements LiteLLM `CustomLogger` / proxy hooks |
 | 3 | **Classifier Adapter** | Wraps off-the-shelf classifiers; scans ingested content (tool/MCP outputs, retrieved docs) for content-borne injection | `classify(text) -> {label, score, categories}` |
-| 4 | **Session Taint Store** | Per-agent-run source/sink state (lightweight taint, not history pooling) | `get(session_id)`; `record_source(...)`; `record_sink(...)`; `state(session_id)` |
+| 4 | **Session Taint Store** | Proxy-issued session IDs (keyed by SHA-256, bound to the API key, idle expiry) and per-agent-run source/sink state (lightweight taint, not history pooling) | `issue(owner) -> id`; `authorize(key, owner)`; `state(key)`; `record_source(...)`; `record_sink(...)` |
 | 5 | **Risk + Routing Engine** | Fuse content score + taint state into composition risk | `score(features, taint_state) -> RiskScore` |
 | 6 | **Routing Policy** | Map risk to action at the active level | `decide(risk_score, level) -> Action` |
 | 7 | **Sink Inspector** | Post-call egress inspection; closes the taint loop | `inspect(response) -> egress_tags` |

@@ -17,10 +17,10 @@ The per-user and per-conversation scopes accumulate state across unrelated tasks
 
 ## Decision
 
-Session = one agent run. A new session ID is derived from the `x-agent-run-id` request header (or a fallback) at the start of each run and is cleared when the run ends (TTL expiry).
+Session = one agent run. The proxy issues the session ID at the start of each run and returns it in the `x-agent-run-id` response header; the agent sends it back on every later request of the run. The session ends when it has been idle longer than the TTL. (Originally the client chose the ID; superseded by [ADR-008](ADR-008-proxy-issued-session-ids.md).)
 
 ## Consequences
 
 - Taint state is scoped to a single goal → fewer false positives from cross-task bleed.
 - The multi-run exfiltration scenario (taint in run 1, sink in run 2) is explicitly **out of scope** per the threat model (ADR-005).
-- Session IDs must be injected by the agent framework or harness; the router cannot derive them from LLM content alone.
+- The agent framework or harness must carry the issued ID between requests; the router cannot derive it from LLM content alone.
