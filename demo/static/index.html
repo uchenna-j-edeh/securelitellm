@@ -566,6 +566,15 @@ untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink
       case 'block_context':
         enrichBlockedBanner(ev.record);
         break;
+      case 'proxy_session': {
+        const sid = document.getElementById('session-id-display');
+        if (sid) sid.textContent = ev.session_ref;
+        break;
+      }
+      case 'session_reset':
+        appendBanner('blocked', '↻ Session rejected by SecureLiteLLM',
+          (ev.message || '') + ' — your next message starts a new session.');
+        break;
     }
   }
 
