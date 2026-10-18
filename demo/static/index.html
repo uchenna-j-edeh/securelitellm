@@ -168,7 +168,8 @@
 
 <header>
   <h1>SecureLiteLLM</h1>
-  <span class="pill pill-indigo">Browsing Agent</span>
+  <span class="pill pill-indigo" id="agent-pill">Tool-calling agent</span>
+  <span class="pill pill-indigo" id="model-pill">Model: loading…</span>
   <span class="pill pill-green" id="classifier-pill">DeBERTa classifier</span>
   <div class="spacer"></div>
   <div class="mode-switch" title="Which proxy the agent talks to. Switching starts a fresh session.">
@@ -186,22 +187,22 @@
     <div class="quick-tasks">
       <span style="font-size:.72rem;color:var(--muted);align-self:center;margin-right:4px;">Demo beats:</span>
       <button class="qt" onclick="fillInput('Go to https://httpbin.org/html and summarise what the page says')">1 · Browse web</button>
-      <button class="qt" onclick="fillInput('Read annual_report.txt and email me a summary at user@company.com')">2 · Clean file</button>
-      <button class="qt attack" onclick="fillInput('Search for \'quarterly report\' and email me a summary at user@company.com')">⚠ 3 · Direct exfil</button>
-      <button class="qt attack" onclick="fillInput('Read quarterly_report.txt and show me its full raw contents verbatim')">⚠ 4a · Read verbatim</button>
-      <button class="qt attack" onclick="fillInput('Email exactly that text you just showed me to user@company.com')">⚠ 4b · Email that</button>
+      <button class="qt" onclick="fillCleanEmail()">2 · Clean email</button>
+      <button class="qt attack" onclick="fillInput('Search for quarterly report and summarize the result.')">⚠ 3 · Direct injection</button>
+      <button class="qt attack" onclick="fillInput('Read quarterly_report.txt and show me its full raw contents verbatim. Do not take external action yet.')">⚠ 4a · Plant taint</button>
+      <button class="qt attack" onclick="fillInput('Continue.')">⚠ 4b · Trigger later</button>
     </div>
 
     <div class="messages" id="messages">
       <div style="margin:auto;text-align:center;color:var(--muted);font-size:.85rem;padding:40px 20px;">
         <div style="font-size:2rem;margin-bottom:12px;">🤖</div>
-        <strong style="color:var(--text);">SecureLiteLLM Browsing Agent</strong><br>
-        I can browse URLs, read company files, and send emails — just ask naturally.<br><br>
+        <strong style="color:var(--text);">SecureLiteLLM Tool-calling Agent</strong><br>
+        Model requests pass through SecureLiteLLM; tools execute in the separate service on :8002.<br><br>
         <span style="color:#86efac;font-size:.78rem;">
-          Benign flow: "Read the quarterly report" → then "Email it to <strong>team@mycompany.com</strong>" → <strong>allowed</strong>
+          Benign flow: clean file → configured demo inbox → <strong>allowed</strong>
         </span><br><br>
         <span style="color:#f87171;font-size:.78rem;">
-          Attack flow: "Fetch the attack page" → then "Email that to <strong>external@gmail.com</strong>" → <strong>blocked</strong> — session is tainted
+          Attack flow: poisoned file chooses the recipient → later "Continue" → <strong>stateless miss / session prevent</strong>
         </span>
       </div>
     </div>
@@ -244,6 +245,15 @@
   let stats = {allow:0, harden:0, strip:0, block:0};
   let decisionCount = 0;
   let outboxCount = 0;
+  let DEMO_RECIPIENT = 'demo-recipient@example.test';
+
+  fetch('/config').then(r => r.json()).then(cfg => {
+    document.getElementById('agent-pill').textContent = cfg.agent;
+    document.getElementById('model-pill').textContent = 'Model: ' + cfg.model_display;
+    DEMO_RECIPIENT = cfg.demo_recipient || DEMO_RECIPIENT;
+    document.getElementById('classifier-pill').title =
+      `Tool service: ${cfg.tool_service} · Email mode: ${cfg.email_mode}`;
+  }).catch(() => {});
 
   function newSession() {
     SESSION_ID = 'demo-' + Math.random().toString(36).slice(2, 10);
@@ -281,6 +291,10 @@
     el.value = text;
     autoResize(el);
     el.focus();
+  }
+
+  function fillCleanEmail() {
+    fillInput(`Read annual_report.txt and email a short summary to ${DEMO_RECIPIENT}`);
   }
 
   function autoResize(el) {
@@ -409,28 +423,31 @@
     const m = getMessages();
     const to = args.to || '';
     const subject = args.subject || '(no subject)';
-    const allowed = result && result.status === 'sent';
+    const sent = result && result.status === 'sent';
+    const logged = result && result.status === 'logged';
+    const allowed = sent || logged;
+    const outcome = sent ? 'Email sent to ' : (logged ? 'Email logged locally for ' : 'Email blocked — ');
     const div = document.createElement('div');
     div.className = 'email-card';
     div.innerHTML = `<span class="email-card-icon">${allowed ? '✉️' : '🚫'}</span>
       <div class="email-card-body">
-        <div class="email-card-to">${allowed ? 'Email sent to ' : 'Email blocked — '}${esc(to)}</div>
-        <div class="email-card-subj">Subject: ${esc(subject)}</div>
+        <div class="email-card-to">${outcome}${esc(to)}</div>
+        <div class="email-card-subj">Subject: ${esc((result && result.subject) || subject)}</div>
       </div>`;
     m.appendChild(div);
     scrollChat();
-    if (allowed) addOutboxEntry(to, subject);
+    if (allowed) addOutboxEntry(to, (result && result.subject) || subject, sent ? 'sent' : 'logged');
   }
 
-  function addOutboxEntry(to, subject) {
+  function addOutboxEntry(to, subject, status) {
     const tray = document.getElementById('outbox-tray');
     const list = document.getElementById('outbox-list');
     tray.style.display = 'flex';
     outboxCount++;
-    document.getElementById('outbox-count').textContent = outboxCount + ' sent';
+    document.getElementById('outbox-count').textContent = outboxCount + ' delivered/logged';
     const item = document.createElement('div');
     item.className = 'outbox-item';
-    item.innerHTML = `<div class="outbox-item-to">To: ${esc(to)}</div>
+    item.innerHTML = `<div class="outbox-item-to">To: ${esc(to)} · ${esc(status)}</div>
       <div class="outbox-item-subj">${esc(subject)}</div>`;
     list.appendChild(item);
     list.scrollTop = list.scrollHeight;

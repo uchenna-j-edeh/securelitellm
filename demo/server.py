@@ -21,7 +21,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from demo.agent import run_chat  # noqa: E402
+from demo.agent import MODEL, run_chat  # noqa: E402
+from demo.tools import TOOL_SERVER_URL  # noqa: E402
 from router.session import session_ref  # noqa: E402
 
 DEMO_DIR = Path(__file__).parent
@@ -55,6 +56,24 @@ _sessions: dict[str, dict] = {}
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     return HTMLResponse((DEMO_DIR / "static" / "index.html").read_text())
+
+
+@app.get("/config")
+async def demo_config() -> dict:
+    if MODEL == "llama":
+        model_display = "Groq · openai/gpt-oss-120b"
+    elif MODEL == "groq":
+        model_display = "Groq · qwen/qwen3.8-27b"
+    else:
+        model_display = MODEL
+    return {
+        "agent": "custom tool-calling agent",
+        "model_alias": MODEL,
+        "model_display": model_display,
+        "tool_service": TOOL_SERVER_URL,
+        "email_mode": os.environ.get("DEMO_EMAIL_MODE", "log"),
+        "demo_recipient": os.environ.get("DEMO_RECIPIENT", "demo-recipient@example.test"),
+    }
 
 
 @app.post("/chat")

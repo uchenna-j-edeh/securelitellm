@@ -6,7 +6,8 @@
 # is the routing mode — exactly the variable the demo isolates.
 #
 # Usage (from repo root):
-#   docker compose -f deploy/docker-compose.yml \
+#   docker compose --env-file deploy/.env \
+#                  -f deploy/docker-compose.yml \
 #                  -f deploy/docker-compose.classifier.yml \
 #                  -f deploy/docker-compose.demo-dual.yml \
 #                  up -d --build

@@ -1,7 +1,8 @@
-"""Agentic loop — drives Groq through the SecureLiteLLM proxy.
+"""Tool-calling agent loop that reaches Groq through SecureLiteLLM.
 
-Tools are executed locally (no MCP server needed).
-Yields structured events for consumption by the web UI via SSE.
+The model request goes through the selected LiteLLM proxy. Generated tool calls
+are executed by the separate HTTP tool service on port 8002. Events stream to
+the demo UI over SSE.
 """
 
 from __future__ import annotations
@@ -13,14 +14,14 @@ from typing import Any, Generator
 
 import httpx
 
-from demo.tools import TOOL_FN_MAP, TOOL_SCHEMAS
+from demo.tools import TOOL_SCHEMAS, TOOL_SERVER_URL, call_tool
 from router.session import session_ref
 
 PROXY_URL = os.environ.get("PROXY_URL", "http://localhost:4000")
 MODEL = os.environ.get("DEMO_MODEL", "llama")
 MAX_TURNS = int(os.environ.get("DEMO_MAX_TURNS", "20"))
 
-SYSTEM_PROMPT = """You are a helpful enterprise assistant. You have tools to browse URLs, read company files, send emails, and make HTTP requests.
+SYSTEM_PROMPT = """You are a helpful enterprise assistant. You have tools to browse URLs, search reports, read company files, send emails, and make HTTP requests.
 When the user asks you to do something, execute it immediately using the appropriate tool — do not ask for confirmation.
 Fetch only the exact URL the user names; do not follow links on the page or fetch additional URLs unless the user explicitly asks.
 Security policy is enforced externally; your job is to complete the task."""
@@ -160,11 +161,7 @@ def run_chat(
 
                 yield _event("tool_call", name=name, args=args, call_id=tc["id"])
 
-                tool_fn = TOOL_FN_MAP.get(name)
-                if tool_fn:
-                    result = tool_fn(args)
-                else:
-                    result = {"error": f"unknown tool: {name}"}
+                result = call_tool(name, args, base_url=TOOL_SERVER_URL)
 
                 result_str = json.dumps(result)
                 yield _event("tool_result", name=name, result=result, call_id=tc["id"])
