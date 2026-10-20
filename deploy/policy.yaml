@@ -20,6 +20,13 @@ rules:
       streaming_tool_request: true
     score: 1.0
 
+  # A generated tool call whose name or arguments cannot be parsed cannot be
+  # inspected. Hold it rather than releasing it uninspected (#82, #156).
+  - id: malformed_tool_call
+    when:
+      malformed_tool_call: true
+    score: 0.75
+
   # L0 — both flags set: untrusted content arrived AND a sink was called.
   # Moderate risk; route to a more cautious model.
   - id: untrusted_and_sink

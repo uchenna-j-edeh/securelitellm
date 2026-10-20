@@ -2,7 +2,14 @@
 
 import hashlib
 
-from router.taint import classify_sinks, classify_sources, tainted_spans_in_sink_args
+import pytest
+
+from router.taint import (
+    classify_sinks,
+    classify_sources,
+    tainted_spans_in_sink_args,
+    tool_call_defect,
+)
 
 # ---------------------------------------------------------------------------
 # Source classification (#16)
@@ -233,3 +240,34 @@ def test_tainted_spans_match_nested_sink_value():
     sinks = classify_sinks(messages)
     span_hash = hashlib.sha256(payload.encode()).hexdigest()
     assert tainted_spans_in_sink_args([span_hash], sinks, messages) is True
+
+
+# ---------------------------------------------------------------------------
+# Malformed generated tool calls fail closed (#82, #156)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("arguments", ['{"to": "a@b.com"}', "{}", "", "   ", None])
+def test_tool_call_defect_accepts_object_or_empty_arguments(arguments):
+    assert tool_call_defect("send_email", arguments) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "defect"),
+    [
+        (None, "{}", "missing_name"),
+        ("", "{}", "missing_name"),
+        ("  ", "{}", "missing_name"),
+        (123, "{}", "missing_name"),
+        ("send_email", '{"to": "a@b.com"', "invalid_json"),
+        ("send_email", "to=a@b.com", "invalid_json"),
+        ("send_email", '["a@b.com"]', "arguments_not_object"),
+        ("send_email", '"a@b.com"', "arguments_not_object"),
+        ("send_email", "null", "arguments_not_object"),
+        ("send_email", {"to": "a@b.com"}, "arguments_not_string"),
+        ("send_email", b"{}", "arguments_not_string"),
+        ("send_email", "[" * 100_000, "invalid_json"),
+    ],
+)
+def test_tool_call_defect_flags_malformed_calls(name, arguments, defect):
+    assert tool_call_defect(name, arguments) == defect

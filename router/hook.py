@@ -403,6 +403,7 @@ class RouterHook(CustomLogger):
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
         features["sink_requested"] = True
         features["streaming_tool_request"] = False
+        features["malformed_tool_call"] = any("malformed" in s for s in egress_sinks)
 
         sources = classify_sources(messages)
         untrusted_sources = [s for s in sources if not is_trusted_source(s)]
@@ -532,37 +533,38 @@ async def _classify_sources(
 
 
 def _extract_response_sinks(response: Any) -> list[dict[str, Any]]:
-    """Pull tool_calls out of a LiteLLM completion response object."""
-    from router.taint import _sink_category
+    """Pull tool_calls out of a LiteLLM completion response object.
+
+    Fails closed (#82, #156): a call whose name or arguments cannot be parsed
+    is returned as a sink with ``malformed`` set — even if its name looks like
+    a read tool — so policy holds it rather than releasing it uninspected.
+    """
+    from router.taint import _sink_category, tool_call_defect
 
     sinks = []
-    try:
-        choices = getattr(response, "choices", None) or []
-        for choice in choices:
-            msg = getattr(choice, "message", None)
-            if msg is None:
+    for choice in getattr(response, "choices", None) or []:
+        msg = getattr(choice, "message", None)
+        if msg is None:
+            continue
+        for call in getattr(msg, "tool_calls", None) or []:
+            fn = getattr(call, "function", None)
+            name = getattr(fn, "name", None)
+            arguments = getattr(fn, "arguments", None)
+            defect = tool_call_defect(name, arguments)
+            category = _sink_category(name) if isinstance(name, str) else "other"
+            if category == "read" and defect is None:
                 continue
-            tool_calls = getattr(msg, "tool_calls", None) or []
-            for call in tool_calls:
-                fn = getattr(call, "function", None)
-                if fn is None:
-                    continue
-                name = getattr(fn, "name", "") or ""
-                category = _sink_category(name)
-                if category == "read":
-                    continue
-                arguments = getattr(fn, "arguments", "") or ""
-                sinks.append(
-                    {
-                        "id": getattr(call, "id", None),
-                        "name": name,
-                        "category": category,
-                        "args_length": len(arguments),
-                        "_arguments": arguments,
-                    }
-                )
-    except Exception:
-        pass
+            arguments = arguments if isinstance(arguments, str) else ""
+            sink = {
+                "id": getattr(call, "id", None),
+                "name": name if isinstance(name, str) else "",
+                "category": category,
+                "args_length": len(arguments),
+                "_arguments": arguments,
+            }
+            if defect is not None:
+                sink["malformed"] = defect
+            sinks.append(sink)
     return sinks
 
 

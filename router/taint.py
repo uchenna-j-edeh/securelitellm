@@ -20,6 +20,7 @@ Sink categories:
 """
 
 import hashlib
+import json
 from typing import Any, Iterator
 
 # Known sink function-name prefixes/substrings → category.
@@ -161,6 +162,30 @@ def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sinks
 
 
+def tool_call_defect(name: Any, arguments: Any) -> str | None:
+    """Why a generated tool call cannot be inspected, or None if it can (#82, #156).
+
+    A call must have a non-empty string name, and its arguments must be empty
+    (a no-argument call) or a JSON object. Anything else is malformed: the
+    caller fails closed instead of treating the call as safe or absent.
+    """
+    if not isinstance(name, str) or not name.strip():
+        return "missing_name"
+    if arguments is None:
+        return None
+    if not isinstance(arguments, str):
+        return "arguments_not_string"
+    if not arguments.strip():
+        return None
+    try:
+        parsed = json.loads(arguments)
+    except (json.JSONDecodeError, RecursionError):
+        return "invalid_json"
+    if not isinstance(parsed, dict):
+        return "arguments_not_object"
+    return None
+
+
 def tainted_spans_in_sink_args(
     tainted_spans: list[str],
     sinks: list[dict[str, Any]],
@@ -171,8 +196,6 @@ def tainted_spans_in_sink_args(
     Checks both the whole args string and individual string values inside the
     parsed JSON object — so {"body": "PAYLOAD"} matches SHA-256("PAYLOAD").
     """
-    import json
-
     # Build a map of sink id -> raw args from the message list
     sink_args: dict[str, str] = {}
     for msg in messages:
