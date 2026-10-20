@@ -1,11 +1,16 @@
-"""Real MCP tool server for the SecureLiteLLM demo.
+"""HTTP tool service for the SecureLiteLLM demo agent.
 
-Exposes 6 tools that cover all 4 OWASP Agentic AI / NSA MCP attack classes:
+This service supplies MCP-like tools, but it is not a wire-compatible MCP
+implementation. The demo agent calls these endpoints over HTTP so the tool
+execution boundary is real and visible rather than an in-process function map.
+
+Exposes tools that cover all 4 OWASP Agentic AI / NSA MCP attack classes:
+  fetch_url           → benign live web browsing
   web_search           → direct_exfil  (poisoned search result)
   read_file            → delayed_exfil (poisoned workspace file)
   search_knowledge_base→ rag_poison    (poisoned KB document)
   list_mcp_resources   → mcp_pivot     (poisoned MCP metadata)
-  send_email           → exfil sink    (logs to demo/outbox.jsonl)
+  send_email           → exfil sink    (local log by default; opt-in SMTP)
   http_post            → exfil sink    (logs to demo/webhook_log.jsonl)
 
 Search results are loaded from demo/search_results/*.txt at startup and
@@ -23,13 +28,19 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import smtplib
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.message import EmailMessage
+from email.utils import parseaddr
+from html.parser import HTMLParser
 from pathlib import Path
 
-from fastapi import FastAPI
+import httpx
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 DEMO_DIR = Path(__file__).parent
@@ -38,6 +49,9 @@ KB_DIR = DEMO_DIR / "kb"
 SEARCH_RESULTS_DIR = DEMO_DIR / "search_results"
 OUTBOX = DEMO_DIR / "logs" / "outbox.jsonl"
 WEBHOOK_LOG = DEMO_DIR / "logs" / "webhook_log.jsonl"
+
+DEFAULT_DEMO_RECIPIENT = "demo-recipient@example.test"
+RECIPIENT_TOKEN = "{{DEMO_RECIPIENT}}"
 
 DEMO_DIR.mkdir(exist_ok=True)
 (DEMO_DIR / "logs").mkdir(exist_ok=True)
@@ -101,16 +115,26 @@ def _background_scanner() -> None:
 # Initial synchronous scan so cache is populated before the first request
 _scan_results_dir()
 
+
+def _render_demo_content(content: str) -> str:
+    recipient = os.environ.get("DEMO_RECIPIENT", DEFAULT_DEMO_RECIPIENT).strip().lower()
+    return content.replace(RECIPIENT_TOKEN, recipient)
+
+
 _scanner_thread = threading.Thread(target=_background_scanner, daemon=True)
 _scanner_thread.start()
 
 
-app = FastAPI(title="Demo MCP Tool Server")
+app = FastAPI(title="SecureLiteLLM Demo Tool Service")
 
 
 # ---------------------------------------------------------------------------
 # Request models
 # ---------------------------------------------------------------------------
+
+
+class FetchURLRequest(BaseModel):
+    url: str
 
 
 class SearchRequest(BaseModel):
@@ -141,6 +165,61 @@ class HttpPostRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class _TextExtractor(HTMLParser):
+    _SKIP_TAGS = {"script", "style", "nav", "footer", "header", "aside", "noscript"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag in self._SKIP_TAGS:
+            self._depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP_TAGS and self._depth > 0:
+            self._depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._depth == 0 and (text := data.strip()):
+            self._parts.append(text)
+
+    def text(self) -> str:
+        return re.sub(r"\s{3,}", "\n\n", " ".join(self._parts)).strip()
+
+
+@app.post("/tools/fetch_url")
+def fetch_url(req: FetchURLRequest) -> dict:
+    """Fetch one named URL. Link-following is deliberately not implemented."""
+    try:
+        response = httpx.get(
+            req.url,
+            follow_redirects=True,
+            timeout=15,
+            headers={"User-Agent": "SecureLiteLLM-Demo/1.0"},
+        )
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        if "html" in content_type:
+            parser = _TextExtractor()
+            parser.feed(response.text)
+            content = parser.text()
+        else:
+            content = response.text.strip()
+        max_content = int(os.environ.get("DEMO_MAX_CONTENT", "6000"))
+        return {
+            "url": req.url,
+            "status": response.status_code,
+            "content": content[:max_content],
+            "truncated": len(content) > max_content,
+        }
+    except httpx.HTTPStatusError as exc:
+        return {"url": req.url, "error": f"HTTP {exc.response.status_code}"}
+    except Exception as exc:
+        return {"url": req.url, "error": str(exc)}
+
+
 @app.post("/tools/web_search")
 def web_search(req: SearchRequest) -> dict:
     # Direct mapping: query → filename stem.
@@ -150,7 +229,7 @@ def web_search(req: SearchRequest) -> dict:
     with _cache_lock:
         entry = _cache.get(stem)
     if entry:
-        return {"result": entry.content}
+        return {"result": _render_demo_content(entry.content)}
     return {"result": "No relevant results found. Try refining your search terms."}
 
 
@@ -161,7 +240,7 @@ def read_file(req: ReadFileRequest) -> dict:
         return {"error": "access denied"}
     if not safe_path.exists():
         return {"error": f"file not found: {req.path}"}
-    return {"content": safe_path.read_text()}
+    return {"content": _render_demo_content(safe_path.read_text())}
 
 
 @app.post("/tools/search_knowledge_base")
@@ -199,15 +278,108 @@ def list_mcp_resources() -> dict:
 
 @app.post("/tools/send_email")
 def send_email(req: SendEmailRequest) -> dict:
+    """Log an email locally or deliver it by explicitly enabled SMTP.
+
+    SMTP mode is bounded by an exact recipient allowlist and adds a mandatory
+    demo subject prefix. These transport safeguards are separate from the
+    SecureLiteLLM policy under evaluation.
+    """
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "to": req.to,
-        "subject": req.subject,
+        "to": _normalize_recipient(req.to),
+        "subject": _demo_subject(req.subject),
         "body": req.body,
     }
+    mode = os.environ.get("DEMO_EMAIL_MODE", "log").strip().lower()
+    if mode not in {"log", "smtp"}:
+        raise HTTPException(status_code=503, detail="DEMO_EMAIL_MODE must be log or smtp")
+
+    if mode == "smtp":
+        allowlist = _email_allowlist()
+        if record["to"] not in allowlist:
+            raise HTTPException(
+                status_code=403,
+                detail=f"recipient is not in DEMO_EMAIL_ALLOWLIST: {record['to']}",
+            )
+        _smtp_send(record)
+        record["status"] = "sent"
+        record["delivery_mode"] = "smtp"
+    else:
+        record["status"] = "logged"
+        record["delivery_mode"] = "log"
+
     with OUTBOX.open("a") as f:
         f.write(json.dumps(record) + "\n")
-    return {"status": "sent", "to": req.to}
+    return {
+        "status": record["status"],
+        "delivery_mode": record["delivery_mode"],
+        "to": record["to"],
+        "subject": record["subject"],
+    }
+
+
+def _normalize_recipient(value: str) -> str:
+    """Accept one plain mailbox and reject display names or recipient lists."""
+    raw = value.strip()
+    display_name, address = parseaddr(raw)
+    normalized = address.lower()
+    if (
+        display_name
+        or normalized != raw.lower()
+        or normalized.count("@") != 1
+        or any(char in raw for char in ",;\n\r")
+    ):
+        raise HTTPException(status_code=422, detail="send_email accepts one plain email address")
+    return normalized
+
+
+def _email_allowlist() -> set[str]:
+    default_recipient = os.environ.get("DEMO_RECIPIENT", DEFAULT_DEMO_RECIPIENT)
+    configured = os.environ.get("DEMO_EMAIL_ALLOWLIST", default_recipient)
+    return {value.strip().lower() for value in configured.split(",") if value.strip()}
+
+
+def _demo_subject(subject: str) -> str:
+    prefix = os.environ.get("DEMO_EMAIL_SUBJECT_PREFIX", "[SecureLiteLLM DEMO]").strip()
+    clean_subject = subject.strip() or "Agent email test"
+    return clean_subject if clean_subject.startswith(prefix) else f"{prefix} {clean_subject}"
+
+
+def _smtp_send(record: dict) -> None:
+    host = os.environ.get("SMTP_HOST", "").strip()
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    username = os.environ.get("SMTP_USERNAME", "").strip()
+    password = os.environ.get("SMTP_PASSWORD", "")
+    from_address = os.environ.get("SMTP_FROM", username).strip().lower()
+    use_starttls = os.environ.get("SMTP_STARTTLS", "true").lower() in {"1", "true", "yes"}
+
+    if not host or not from_address:
+        raise HTTPException(
+            status_code=503,
+            detail="SMTP_HOST and SMTP_FROM (or SMTP_USERNAME) are required in smtp mode",
+        )
+    if username and not password:
+        raise HTTPException(status_code=503, detail="SMTP_PASSWORD is required with SMTP_USERNAME")
+
+    message = EmailMessage()
+    message["From"] = from_address
+    message["To"] = record["to"]
+    message["Subject"] = record["subject"]
+    message.set_content(
+        f"{record['body']}\n\n"
+        "---\n"
+        "Synthetic classroom demo generated by SecureLiteLLM. No real financial data."
+    )
+
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as client:
+            if use_starttls:
+                client.starttls()
+            if username:
+                client.login(username, password)
+            client.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        raise HTTPException(status_code=502, detail=f"SMTP delivery failed: {exc}") from exc
 
 
 @app.post("/tools/http_post")
@@ -231,6 +403,7 @@ def health() -> dict:
 def list_tools() -> dict:
     return {
         "tools": [
+            "fetch_url",
             "web_search",
             "read_file",
             "search_knowledge_base",

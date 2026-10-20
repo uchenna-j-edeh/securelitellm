@@ -1,14 +1,17 @@
-.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-dry freeze classifier-up demo demo-mcp demo-dual-up demo-dual-down
+.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down
 
 # Well-known key used exclusively for E2E tests — never the production key.
 E2E_KEY := sk-test-e2e-key
+# Prefer the pinned uv environment. A checked-in-place .venv remains usable when
+# uv is not on PATH (for example, from a fresh terminal after `uv sync`).
+PYTHON := $(shell if command -v uv >/dev/null 2>&1; then printf 'uv run python'; elif test -x .venv/bin/python; then printf '.venv/bin/python'; else printf 'python3'; fi)
 
 lint:
-	uv run ruff check .
-	uv run ruff format --check .
+	$(PYTHON) -m ruff check .
+	$(PYTHON) -m ruff format --check .
 
 test:
-	uv run pytest tests/ -v --ignore=tests/test_e2e.py
+	$(PYTHON) -m pytest tests/ -v --ignore=tests/test_e2e.py
 
 # Start the proxy in the configuration required for E2E tests:
 #   - harness overlay mounts harness/logs → /logs so decisions.jsonl is accessible
@@ -30,7 +33,7 @@ e2e-down:
 test-e2e:
 	E2E_MASTER_KEY=$(E2E_KEY) \
 	E2E_DECISION_LOG="harness/logs/decisions.jsonl" \
-	uv run pytest tests/test_e2e.py -v -m e2e
+	$(PYTHON) -m pytest tests/test_e2e.py -v -m e2e
 
 up:
 	docker compose -f deploy/docker-compose.yml up -d --build
@@ -49,39 +52,60 @@ dev:
 #   tool-result turn, no decision is logged, and every row reads `unknown` (silent ~6h no-op).
 # Override either on the command line, e.g. `HARNESS_MODEL=groq make eval`.
 eval:
-	CLASSIFIER_BACKEND=local HARNESS_MODEL=mock uv run python harness/matrix.py --seeds 3
-	uv run python eval/metrics.py --table --figures
+	CLASSIFIER_BACKEND=local HARNESS_MODEL=mock $(PYTHON) harness/matrix.py --seeds 3
+	$(PYTHON) eval/metrics.py --table --figures
 
 # Quick dry-run (no Docker needed — just enumerates runs)
 eval-dry:
-	uv run python harness/matrix.py --dry-run
+	$(PYTHON) harness/matrix.py --dry-run
 
 # Local classifier sidecar — DeBERTa prompt-injection model (downloads ~180 MB on first run)
 # Swap model: CLASSIFIER_MODEL=<hf-model-id> make classifier-up
 classifier-up:
 	docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.classifier.yml up -d --build
 
-# Demo — start the MCP tool server and the web UI (proxy must already be up via make up)
-demo-mcp:
-	uv run python demo/mcp_server.py
+# Demo — start the HTTP tool service and the web UI (proxy must already be up).
+# demo-mcp remains as a backward-compatible alias; the service is MCP-shaped,
+# not a wire-compatible MCP implementation.
+demo-setup:
+	@if command -v uv >/dev/null 2>&1; then \
+		uv sync --locked --all-groups; \
+	elif test ! -x .venv/bin/python; then \
+		echo "uv is required for first-time setup: https://docs.astral.sh/uv/getting-started/installation/" >&2; \
+		exit 2; \
+	fi
+	python3 scripts/setup_demo.py
+
+demo-check:
+	python3 scripts/setup_demo.py --check
+
+demo-check-live:
+	python3 scripts/setup_demo.py --check-online
+
+demo-tools:
+	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)
+	@set -a; . ./deploy/.env; set +a; exec $(PYTHON) demo/mcp_server.py
+
+demo-mcp: demo-tools
 
 demo:
-	@set -a && [ -f deploy/.env ] && . deploy/.env; set +a; \
-	LITELLM_MASTER_KEY="$${LITELLM_MASTER_KEY}" \
-	uv run python demo/server.py
+	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)
+	@set -a; . ./deploy/.env; set +a; exec $(PYTHON) demo/server.py
 
 # Dual-proxy demo stack — session proxy :4000 + stateless proxy :4001, one shared
 # DeBERTa classifier. Powers the live A/B delayed-exfil demo (UI mode switch).
 demo-dual-up:
-	docker compose -f deploy/docker-compose.yml \
+	docker compose --env-file deploy/.env \
+	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
 	               -f deploy/docker-compose.demo-dual.yml up -d --build
 
 demo-dual-down:
-	docker compose -f deploy/docker-compose.yml \
+	docker compose --env-file deploy/.env \
+	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
 	               -f deploy/docker-compose.demo-dual.yml down
 
 # Freeze corpus + env snapshot for reproducibility (#47)
 freeze:
-	uv run python harness/freeze.py --tag
+	$(PYTHON) harness/freeze.py --tag
