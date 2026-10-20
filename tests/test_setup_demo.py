@@ -1,6 +1,7 @@
 """Tests for secure, repeatable demo credential setup."""
 
 import json
+import os
 import stat
 from types import SimpleNamespace
 
@@ -12,6 +13,10 @@ GROQ_KEY = "gsk_abcdefghijklmnopqrstuvwxyz123456"
 APP_PASSWORD = "abcdefghijklmnop"
 RECIPIENT = "recipient@example.test"
 SENDER = "sender@example.test"
+
+# setup_demo sets and checks Unix permissions only on POSIX; Windows has no
+# equivalent mode bits, so those assertions run on POSIX only.
+POSIX = os.name == "posix"
 
 
 def _smtp_config() -> dict:
@@ -50,7 +55,8 @@ def test_private_config_is_mode_600_and_valid(tmp_path):
 
     setup_demo.write_private_file(target, contents)
 
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    if POSIX:
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert setup_demo.check_config(target) == [
         "private file permissions",
         "local proxy credential",
@@ -86,9 +92,11 @@ def test_rotate_local_key_preserves_provider_secrets(tmp_path):
     assert after["LITELLM_MASTER_KEY"] != before["LITELLM_MASTER_KEY"]
     assert after["GROQ_API_KEY"] == before["GROQ_API_KEY"]
     assert after["SMTP_PASSWORD"] == before["SMTP_PASSWORD"]
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    if POSIX:
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(not POSIX, reason="Unix permission bits only")
 def test_check_rejects_overly_open_permissions(tmp_path):
     target = tmp_path / ".env"
     target.write_text(setup_demo.render_config(groq_key=GROQ_KEY, email_mode="log"))
