@@ -80,6 +80,18 @@ def _api_key_owner(user_api_key_dict: Any) -> str:
     return token if isinstance(token, str) else ""
 
 
+def _uses_legacy_function_calling(data: dict, messages: list[dict]) -> bool:
+    """True if the request uses OpenAI's deprecated functions/function_call format (#95).
+
+    No control inspects that format — function results (role=function) are
+    never classified and function_call sinks are never seen — so it is
+    rejected by policy rather than passed through uninspected.
+    """
+    if data.get("functions") is not None or data.get("function_call") is not None:
+        return True
+    return any(m.get("role") == "function" or m.get("function_call") is not None for m in messages)
+
+
 def _is_session_start(messages: list[dict]) -> bool:
     """A new session may carry only system/developer/user messages.
 
@@ -254,7 +266,10 @@ class RouterHook(CustomLogger):
         session_id = session.key
 
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
-        features["streaming_tool_request"] = bool(data.get("stream") and data.get("tools"))
+        features["streaming_tool_request"] = bool(
+            data.get("stream") and (data.get("tools") or data.get("functions"))
+        )
+        features["legacy_function_calling"] = _uses_legacy_function_calling(data, messages)
 
         sources = classify_sources(messages)
         # Trusted first-party sources (sink-result echoes) are never scanned or
@@ -367,6 +382,8 @@ class RouterHook(CustomLogger):
         if action == "strip-tools":
             data = dict(data)
             data.pop("tools", None)
+            data.pop("functions", None)
+            data.pop("function_call", None)
             # Explicitly forbid tool use so the model produces a text response
             # instead of generating a tool call that the API will reject.
             data["tool_choice"] = "none"
