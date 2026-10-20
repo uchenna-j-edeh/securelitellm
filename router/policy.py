@@ -36,6 +36,7 @@ _DEFAULT_THRESHOLDS: dict[str, float] = {
 _ALLOWED_FEATURES = {
     "classifier_error",
     "classifier_injection",
+    "legacy_function_calling",
     "malformed_tool_call",
     "sink_requested",
     "streaming_tool_request",

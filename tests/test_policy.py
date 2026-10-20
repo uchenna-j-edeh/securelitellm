@@ -221,3 +221,10 @@ def test_bundled_policy_holds_malformed_tool_call():
     score, action, matched = engine.evaluate({"malformed_tool_call": True})
     assert action == "strip-tools"  # post-call maps any non-allow, non-block action to hold
     assert "malformed_tool_call" in matched
+
+
+def test_bundled_policy_blocks_legacy_function_calling():
+    engine = PolicyEngine.from_yaml()
+    _, action, matched = engine.evaluate({"legacy_function_calling": True})
+    assert action == "block"
+    assert "legacy_function_calling" in matched

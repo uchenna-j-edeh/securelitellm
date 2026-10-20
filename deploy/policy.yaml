@@ -55,3 +55,11 @@ rules:
     when:
       tainted_spans_in_sink_args: true
     score: 1.0
+
+  # The deprecated OpenAI functions/function_call format is invisible to every
+  # control: role=function results are never classified and function_call
+  # sinks are never inspected or stripped. Reject it outright (#95).
+  - id: legacy_function_calling
+    when:
+      legacy_function_calling: true
+    score: 1.0
