@@ -382,6 +382,7 @@ async def test_generated_read_only_tool_is_not_held(hook_enforcing, log_path):
         ("read_email", '{"id": 1', "invalid_json"),  # read-named calls are not exempt
         (None, '{"to": "evil@example.com"}', "missing_name"),
         (123, "{}", "missing_name"),  # used to raise inside a swallowed except
+        ("send_email", "[" * 100_000, "too_deep"),  # would overflow the C stack
     ],
 )
 @pytest.mark.asyncio

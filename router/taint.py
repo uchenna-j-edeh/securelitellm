@@ -162,12 +162,43 @@ def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sinks
 
 
+# Deepest JSON nesting accepted in tool arguments. json.loads recurses per
+# level in C; very deep input overflows the stack on platforms with small
+# thread stacks (Windows) and crashes the process instead of raising.
+MAX_ARGUMENT_DEPTH = 64
+
+
+_NON_BRACKET_BYTES = bytes(b for b in range(256) if b not in b"[]{}")
+_TO_SQUARE = bytes.maketrans(b"{}", b"[]")
+
+
+def _exceeds_depth(text: str, limit: int = MAX_ARGUMENT_DEPTH) -> bool:
+    """True if JSON *text* may nest objects/arrays deeper than *limit*.
+
+    Conservative: brackets inside string literals are counted too, so text
+    whose strings carry more than *limit* unbalanced brackets is reported as
+    well — that only fails closed. Runs in C: keep only the brackets, then
+    peel one level of innermost "[]" pairs per pass.
+    """
+    if text.count("[") + text.count("{") <= limit:
+        return False
+    brackets = text.encode("utf-8", "surrogatepass").translate(_TO_SQUARE, _NON_BRACKET_BYTES)
+    for depth in range(limit + 1):
+        reduced = brackets.replace(b"[]", b"")
+        if reduced == brackets:
+            # Left over: "]"*a + "["*b — b unclosed opens wrap the matched depth.
+            return depth + reduced.count(b"[") > limit
+        brackets = reduced
+    return True
+
+
 def tool_call_defect(name: Any, arguments: Any) -> str | None:
     """Why a generated tool call cannot be inspected, or None if it can (#82, #156).
 
     A call must have a non-empty string name, and its arguments must be empty
-    (a no-argument call) or a JSON object. Anything else is malformed: the
-    caller fails closed instead of treating the call as safe or absent.
+    (a no-argument call) or a JSON object nested at most MAX_ARGUMENT_DEPTH
+    levels. Anything else is malformed: the caller fails closed instead of
+    treating the call as safe or absent.
     """
     if not isinstance(name, str) or not name.strip():
         return "missing_name"
@@ -177,6 +208,8 @@ def tool_call_defect(name: Any, arguments: Any) -> str | None:
         return "arguments_not_string"
     if not arguments.strip():
         return None
+    if _exceeds_depth(arguments):
+        return "too_deep"
     try:
         parsed = json.loads(arguments)
     except (json.JSONDecodeError, RecursionError):
@@ -212,12 +245,14 @@ def tainted_spans_in_sink_args(
         if hashlib.sha256(args.encode()).hexdigest() in span_set:
             return True
         # Check each string value inside a JSON object
+        if _exceeds_depth(args):
+            continue  # never parsed; post-call holds it as malformed (too_deep)
         try:
             parsed = json.loads(args)
             for value in _iter_string_values(parsed):
                 if hashlib.sha256(value.encode()).hexdigest() in span_set:
                     return True
-        except (json.JSONDecodeError, AttributeError):
+        except (json.JSONDecodeError, RecursionError, AttributeError):
             pass
     return False
 
