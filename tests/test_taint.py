@@ -268,7 +268,7 @@ def test_tool_call_defect_accepts_object_or_empty_arguments(arguments):
         ("send_email", "null", "arguments_not_object"),
         ("send_email", {"to": "a@b.com"}, "arguments_not_string"),
         ("send_email", b"{}", "arguments_not_string"),
-        ("send_email", "[" * 100_000, "too_deep"),
+        pytest.param("send_email", "[" * 100_000, "too_deep", id="deep-100k"),
         ("send_email", '{"a":' * 65 + "1" + "}" * 65, "too_deep"),
     ],
 )
