@@ -214,3 +214,10 @@ def test_bundled_policy_allows_clean_request():
     engine = PolicyEngine.from_yaml()
     score, action, _ = engine.evaluate({"untrusted_seen": False, "sink_requested": False})
     assert action == "allow"
+
+
+def test_bundled_policy_holds_malformed_tool_call():
+    engine = PolicyEngine.from_yaml()
+    score, action, matched = engine.evaluate({"malformed_tool_call": True})
+    assert action == "strip-tools"  # post-call maps any non-allow, non-block action to hold
+    assert "malformed_tool_call" in matched

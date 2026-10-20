@@ -1,8 +1,17 @@
 """Tests for source/sink classification and taint model (issues #16, #17, #18)."""
 
 import hashlib
+import json
 
-from router.taint import classify_sinks, classify_sources, tainted_spans_in_sink_args
+import pytest
+
+from router.taint import (
+    MAX_ARGUMENT_DEPTH,
+    classify_sinks,
+    classify_sources,
+    tainted_spans_in_sink_args,
+    tool_call_defect,
+)
 
 # ---------------------------------------------------------------------------
 # Source classification (#16)
@@ -233,3 +242,85 @@ def test_tainted_spans_match_nested_sink_value():
     sinks = classify_sinks(messages)
     span_hash = hashlib.sha256(payload.encode()).hexdigest()
     assert tainted_spans_in_sink_args([span_hash], sinks, messages) is True
+
+
+# ---------------------------------------------------------------------------
+# Malformed generated tool calls fail closed (#82, #156)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("arguments", ['{"to": "a@b.com"}', "{}", "", "   ", None])
+def test_tool_call_defect_accepts_object_or_empty_arguments(arguments):
+    assert tool_call_defect("send_email", arguments) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments", "defect"),
+    [
+        (None, "{}", "missing_name"),
+        ("", "{}", "missing_name"),
+        ("  ", "{}", "missing_name"),
+        (123, "{}", "missing_name"),
+        ("send_email", '{"to": "a@b.com"', "invalid_json"),
+        ("send_email", "to=a@b.com", "invalid_json"),
+        ("send_email", '["a@b.com"]', "arguments_not_object"),
+        ("send_email", '"a@b.com"', "arguments_not_object"),
+        ("send_email", "null", "arguments_not_object"),
+        ("send_email", {"to": "a@b.com"}, "arguments_not_string"),
+        ("send_email", b"{}", "arguments_not_string"),
+        pytest.param("send_email", "[" * 100_000, "too_deep", id="deep-100k"),
+        ("send_email", '{"a":' * 65 + "1" + "}" * 65, "too_deep"),
+    ],
+)
+def test_tool_call_defect_flags_malformed_calls(name, arguments, defect):
+    assert tool_call_defect(name, arguments) == defect
+
+
+def test_tool_call_defect_accepts_nesting_at_the_limit():
+    nested = '{"a":' * MAX_ARGUMENT_DEPTH + "1" + "}" * MAX_ARGUMENT_DEPTH
+    assert tool_call_defect("send_email", nested) is None
+
+
+def test_depth_guard_allows_balanced_brackets_inside_strings():
+    body = "see [link](https://example.com) and [note]. " * 500
+    assert tool_call_defect("send_email", json.dumps({"body": body})) is None
+
+
+def test_depth_guard_is_conservative_for_unbalanced_brackets_in_strings():
+    """Brackets in strings are counted: >limit unclosed ones fail closed."""
+    body = "[" * (MAX_ARGUMENT_DEPTH + 1)
+    assert tool_call_defect("send_email", json.dumps({"body": body})) == "too_deep"
+
+
+@pytest.mark.parametrize(
+    ("text", "deep"),
+    [
+        ("[]" * 200, False),
+        ("[" * 64 + "]" * 64 + "[]" * 10, False),
+        ("[" * 65 + "]" * 65, True),
+        ("{" + '"a":[' * 63 + "1" + "]" * 63 + "}", False),
+        ("[" * 30 + "[" * 35 + "]" * 35, True),  # unclosed opens wrap matched depth
+        ("]" * 100 + "[" * 10, False),
+    ],
+)
+def test_exceeds_depth(text, deep):
+    from router.taint import _exceeds_depth
+
+    assert _exceeds_depth(text) is deep
+
+
+def test_depth_guard_allows_many_shallow_objects():
+    rows = json.dumps({"rows": [{"id": i} for i in range(500)]})
+    assert tool_call_defect("send_email", rows) is None
+
+
+def test_tainted_spans_skip_over_deep_arguments():
+    """Deeply nested sink arguments must not crash the L3 check."""
+    deep = "[" * 100_000
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "c1", "function": {"name": "send_email", "arguments": deep}}],
+        }
+    ]
+    assert tainted_spans_in_sink_args(["0" * 64], classify_sinks(messages), messages) is False

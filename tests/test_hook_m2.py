@@ -374,6 +374,97 @@ async def test_generated_read_only_tool_is_not_held(hook_enforcing, log_path):
     assert len(_request_records(log_path)) == 1
 
 
+@pytest.mark.parametrize(
+    ("name", "arguments", "defect"),
+    [
+        ("send_email", '{"to": "evil@example.com", "body": "secret"', "invalid_json"),
+        ("send_email", '["evil@example.com"]', "arguments_not_object"),
+        ("read_email", '{"id": 1', "invalid_json"),  # read-named calls are not exempt
+        (None, '{"to": "evil@example.com"}', "missing_name"),
+        (123, "{}", "missing_name"),  # used to raise inside a swallowed except
+        pytest.param("send_email", "[" * 100_000, "too_deep", id="deep-100k"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_generated_tool_call_is_held(
+    hook_enforcing, log_path, name, arguments, defect
+):
+    """#82, #156: a call that cannot be parsed is held, never released uninspected."""
+    data = make_data([{"role": "user", "content": "Email my report"}], session_id="malformed")
+    response = make_response(name=name, arguments=arguments)
+
+    held = await hook_enforcing.async_post_call_success_hook(MagicMock(), data, response)
+
+    assert held is not None and held is not response
+    assert held.choices[0].message.tool_calls is None
+    assert held.choices[0].finish_reason == "content_filter"
+    record = read_record(log_path)
+    assert record["action"] == "hold"
+    assert "malformed_tool_call" in record["matched_rules"]
+    assert record["features"]["malformed_tool_call"] is True
+    assert record["tool_context"]["generated_tool_calls"][0]["malformed"] == defect
+    assert "evil@example.com" not in json.dumps(record)  # raw arguments never logged
+
+
+@pytest.mark.asyncio
+async def test_tool_call_without_function_is_held(hook_enforcing, log_path):
+    response = make_response()
+    response.choices[0].message.tool_calls[0].function = None
+    data = make_data([{"role": "user", "content": "hi"}], session_id="no-function")
+
+    held = await hook_enforcing.async_post_call_success_hook(MagicMock(), data, response)
+
+    assert held.choices[0].message.tool_calls is None
+    assert read_record(log_path)["tool_context"]["generated_tool_calls"][0]["malformed"] == (
+        "missing_name"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_call_held_alongside_valid_call(hook_enforcing, log_path):
+    """One malformed call holds the whole response — the valid one is not released."""
+    response = make_response(arguments='{"to": "owner@example.com"}')
+    message = response.choices[0].message
+    bad = SimpleNamespace(
+        id="generated-2", function=SimpleNamespace(name="send_email", arguments="{oops")
+    )
+    message.tool_calls.append(bad)
+    data = make_data([{"role": "user", "content": "hi"}], session_id="mixed")
+
+    held = await hook_enforcing.async_post_call_success_hook(MagicMock(), data, response)
+
+    assert held.choices[0].message.tool_calls is None
+    calls = read_record(log_path)["tool_context"]["generated_tool_calls"]
+    assert [c.get("malformed") for c in calls] == [None, "invalid_json"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_tool_call_audit_mode_logs_only(hook_session, log_path):
+    data = make_data([{"role": "user", "content": "hi"}], session_id="audit-malformed")
+    response = make_response(arguments="{oops")
+
+    result = await hook_session.async_post_call_success_hook(MagicMock(), data, response)
+
+    assert result is None
+    record = read_record(log_path)
+    assert record["policy_action"] != "allow"
+    assert "malformed_tool_call" in record["matched_rules"]
+
+
+@pytest.mark.asyncio
+async def test_well_formed_no_argument_call_is_not_malformed(hook_enforcing, log_path):
+    data = make_data([{"role": "user", "content": "Email my report"}], session_id="no-args")
+
+    result = await hook_enforcing.async_post_call_success_hook(
+        MagicMock(), data, make_response(arguments="")
+    )
+
+    assert result is None
+    record = read_record(log_path)
+    assert record["action"] == "execute"
+    assert record["features"]["malformed_tool_call"] is False
+
+
 @pytest.mark.asyncio
 async def test_streaming_request_with_tools_is_blocked(hook_enforcing):
     import litellm.exceptions as _le
