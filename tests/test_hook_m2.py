@@ -795,7 +795,7 @@ async def test_streaming_with_legacy_functions_is_flagged(hook_session, log_path
 @pytest.mark.asyncio
 async def test_strip_tools_also_removes_legacy_functions(hook_enforcing, monkeypatch):
     monkeypatch.setattr(
-        hook_enforcing._policy, "evaluate", lambda features: (0.75, "strip-tools", ["forced"])
+        hook_enforcing._policy, "assess", lambda features: (0.75, "high", ["forced"])
     )
     data = make_data([{"role": "user", "content": "hi"}], session_id="legacy-strip")
     data.update(
