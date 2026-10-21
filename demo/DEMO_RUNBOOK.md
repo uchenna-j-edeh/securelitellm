@@ -39,10 +39,11 @@ Docker: LiteLLM + SecureLiteLLM hook
     |-- session proxy   :4000
     |-- stateless proxy :4001
     |-- DeBERTa prompt-injection classifier :8080 (internal Docker network)
-    `-- mock model :8001 (fallback/evaluation; not the primary live-demo model)
+    |-- mock model :8001 (fallback/evaluation; serves the hardened route)
+    `-- Ollama qwen2.5:1.5b (internal Docker network; serves the quarantine route)
     |
     v
-Groq API: model alias `gpt` -> `groq/openai/gpt-oss-120b`
+Groq API: model alias `gpt` -> `groq/openai/gpt-oss-120b` (low-risk requests)
 
 When the model generates a tool call:
 
@@ -58,8 +59,8 @@ The browser holds only a UI handle. The proxy issues the real `x-agent-run-id`, 
 server keeps that value server-side, and the UI/decision log displays only its
 non-secret `session_ref` fingerprint.
 
-Docker provides reproducible isolation for both proxy modes, the local classifier, and
-the mock fallback model. The UI, agent, and tool service run on the host so their code
+Docker provides reproducible isolation for both proxy modes, the local classifier, the
+mock fallback model, and the local quarantine model. The UI, agent, and tool service run on the host so their code
 can be restarted quickly during development.
 
 ## Portable email safety model
@@ -177,6 +178,7 @@ Docker Desktop must be running before the first command.
 
 ```bash
 # Terminal 1: session proxy + stateless proxy + classifier + mock fallback
+# + local Ollama quarantine model (first start downloads ~1 GB)
 make demo-dual-up
 
 # Terminal 2: HTTP tool service; reads SMTP settings from deploy/.env
@@ -194,7 +196,8 @@ open http://localhost:8003
 ## Pre-flight checks
 
 ```bash
-# Four Docker services should be healthy/running.
+# Five Docker services should be healthy/running, and ollama-pull should have
+# exited with code 0 after downloading the quarantine model.
 docker compose \
   --env-file deploy/.env \
   -f deploy/docker-compose.yml \
@@ -286,8 +289,9 @@ Expected:
 
 - `web_search` returns content containing the injected email instruction.
 - DeBERTa reports `INJECTION`.
-- The default policy produces `strip-tools`; tool access is removed before the model can
-  execute the injected email action.
+- The default policy produces `strip-tools`: the risk level is `high`, so the request
+  takes the `quarantine` route. Tool access is removed and the request is answered by the
+  local Ollama model, so the poisoned context does not go to Groq.
 - No `Direct injection demo` message is delivered and no corresponding outbox record is
   added.
 
