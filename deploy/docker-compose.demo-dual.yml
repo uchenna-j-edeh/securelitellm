@@ -37,7 +37,7 @@ services:
       - LOCAL_CLASSIFIER_URL=http://local-classifier:8080
       - PROMPTGUARD_THRESHOLD=${PROMPTGUARD_THRESHOLD:-0.5}
       - ROUTER_ENFORCE=${ROUTER_ENFORCE:-true}
-      - ROUTER_HARDENED_MODEL=${ROUTER_HARDENED_MODEL:-mock}
+      - ROUTER_LITELLM_CONFIG=/app/config.yaml
       - POLICY_PATH=${POLICY_PATH:-/workspace/deploy/policy.yaml}
     depends_on:
       mock-model:

@@ -1,17 +1,33 @@
 # SecureLiteLLM default routing policy
 #
 # Risk score = max score of all matching rules.
-# Risk level by threshold, and the route each level takes (#140):
-#   score >= critical → critical → block (reject the request)
-#   score >= high     → high     → quarantine (remove tool definitions)
-#   score >= elevated → elevated → hardened (redirect to ROUTER_HARDENED_MODEL)
-#   score <  elevated → low      → standard (unchanged)
-# This file has no routes/matrix sections, so the built-in table above applies.
+# Risk level by threshold:
+#   score >= critical → critical
+#   score >= high     → high
+#   score >= elevated → elevated
+#   score <  elevated → low
+# The routing table below maps each risk level and data class to a route (#140).
 
 thresholds:
   elevated: 0.4
   high: 0.7
   critical: 0.9
+
+# A route is a LiteLLM model group plus the controls the hook enforces.
+# "requested" keeps the model the client asked for. Every model group named
+# here must exist in the LiteLLM config, or the proxy refuses to start.
+routes:
+  standard:   { model: requested }
+  hardened:   { model: hardened }                  # elevated-risk model group
+  quarantine: { model: requested, tools: none }    # tool definitions removed
+
+# Risk level × data class → route. Rows may only become more restrictive as
+# risk rises, and critical must be block.
+matrix:
+  low:      { public: standard }
+  elevated: { public: hardened }
+  high:     { public: quarantine }
+  critical: block
 
 rules:
   # Streaming tool calls cannot be synchronously inspected by the current

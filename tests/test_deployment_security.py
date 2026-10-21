@@ -85,3 +85,15 @@ def test_aws_deploy_requires_explicit_enablement_and_configuration():
         "ECS_SERVICE",
     ):
         assert required in workflow
+
+
+def test_deployments_point_the_router_at_their_litellm_config():
+    for path in ("deploy/docker-compose.yml", "deploy/docker-compose.demo-dual.yml"):
+        compose = load_yaml(path)
+        for name, service in compose["services"].items():
+            environment = service.get("environment") or []
+            if not any(item.startswith("POLICY_PATH=") for item in environment):
+                continue  # not a router service
+            assert "ROUTER_LITELLM_CONFIG=/app/config.yaml" in environment, (path, name)
+            assert not any(item.startswith("ROUTER_HARDENED_MODEL") for item in environment)
+    assert "ENV ROUTER_LITELLM_CONFIG=/app/config.yaml" in (ROOT / "deploy/Dockerfile").read_text()

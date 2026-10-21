@@ -5,6 +5,15 @@ model_list:
       api_base: http://127.0.0.1:8001/v1
       api_key: "sk-fake"
 
+  # Routing tier (#140): requests at elevated risk are sent to this group.
+  - model_name: hardened
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://127.0.0.1:8001/v1
+      api_key: "sk-fake"
+    model_info:
+      supports_function_calling: true
+
 litellm_settings:
   drop_params: true
   callbacks: ["router.hook.proxy_handler_instance"]

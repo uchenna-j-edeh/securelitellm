@@ -395,8 +395,9 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `ROUTER_MODE` | `session` | `stateless`, `session` |
 | `ROUTER_LEVEL` | `L3` | `L0`, `L1`, `L2`, `L3` |
 | `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
-| `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false` or `classifier_backend=none`) at startup |
+| `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false`, `classifier_backend=none`, or a policy without a routing table) at startup |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path; harness overlay sets `/logs/decisions.jsonl` |
+| `ROUTER_LITELLM_CONFIG` | unset (compose and the Docker image set `/app/config.yaml`) | path to the LiteLLM config; every model group the policy routing table names must exist in its `model_list`, or the proxy refuses to start |
 | `CLASSIFIER_BACKEND` | `none` | `none`, `local`, `mock`, `promptguard`, `llmguard` |
 | `LOCAL_CLASSIFIER_URL` | `http://local-classifier:8080` | URL of the local classifier sidecar |
 | `CLASSIFIER_MODEL` | `protectai/deberta-v3-base-prompt-injection-v2` | any HuggingFace text-classification model |

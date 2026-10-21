@@ -254,7 +254,7 @@ function Start-LocalStack {
     $env:CLASSIFIER_BACKEND = if ($env:CLASSIFIER_BACKEND) { $env:CLASSIFIER_BACKEND } else { "none" }
     $env:PROMPTGUARD_THRESHOLD = if ($env:PROMPTGUARD_THRESHOLD) { $env:PROMPTGUARD_THRESHOLD } else { "0.5" }
     $env:ROUTER_ENFORCE = if ($env:ROUTER_ENFORCE) { $env:ROUTER_ENFORCE } else { "true" }
-    $env:ROUTER_HARDENED_MODEL = if ($env:ROUTER_HARDENED_MODEL) { $env:ROUTER_HARDENED_MODEL } else { "mock" }
+    $env:ROUTER_LITELLM_CONFIG = $LocalConfigFile
     $env:POLICY_PATH = Join-Path $RepoRoot "deploy\policy.yaml"
 
     $mock = Start-Process `
