@@ -2,11 +2,19 @@
 
 Rules are loaded from a YAML file (POLICY_PATH env var or the bundled default).
 Each rule has a `when` block (all conditions ANDed) and a `score` (0–1).
-Risk score = max score of all matching rules.  Action is determined by
-comparing the risk score against configurable thresholds.
+Risk score = max score of all matching rules.  The risk level is determined by
+comparing the risk score against configurable thresholds; router.routing maps
+the level to a route (#140).
 
-Actions
--------
+Risk levels
+-----------
+low       score < elevated.
+elevated  score >= elevated  (formerly route-hardened).
+high      score >= high      (formerly strip-tools).
+critical  score >= critical  (formerly block).
+
+Legacy actions
+--------------
 allow           Pass through unchanged.
 route-hardened  Redirect to ROUTER_HARDENED_MODEL (a more restricted model alias).
 strip-tools     Remove tool definitions from the request so the LLM cannot call tools.
@@ -26,12 +34,28 @@ from pathlib import Path
 from typing import Any, Literal
 
 Action = Literal["allow", "route-hardened", "strip-tools", "block"]
+RiskLevel = Literal["low", "elevated", "high", "critical"]
+
+RISK_LEVELS: tuple[RiskLevel, ...] = ("low", "elevated", "high", "critical")
+LEGACY_ACTIONS: dict[RiskLevel, Action] = {
+    "low": "allow",
+    "elevated": "route-hardened",
+    "high": "strip-tools",
+    "critical": "block",
+}
 
 _BUNDLED_POLICY = Path(__file__).parent.parent / "deploy" / "policy.yaml"
+_THRESHOLD_LEVELS: tuple[RiskLevel, ...] = ("elevated", "high", "critical")
 _DEFAULT_THRESHOLDS: dict[str, float] = {
-    "route_hardened": 0.4,
-    "strip_tools": 0.7,
-    "block": 0.9,
+    "elevated": 0.4,
+    "high": 0.7,
+    "critical": 0.9,
+}
+# Pre-#140 threshold names, still accepted.
+_LEGACY_THRESHOLD_KEYS = {
+    "route_hardened": "elevated",
+    "strip_tools": "high",
+    "block": "critical",
 }
 _ALLOWED_FEATURES = {
     "classifier_error",
@@ -54,6 +78,19 @@ class PolicyViolation(Exception):
         super().__init__(f"Request blocked by policy (score={risk_score:.3f}, rules={rule_ids})")
 
 
+def _normalize_thresholds(raw: dict[str, Any]) -> dict[str, Any]:
+    """Map legacy threshold names to risk levels; reject unknown or duplicate keys."""
+    normalized: dict[str, Any] = {}
+    for key, value in raw.items():
+        level = _LEGACY_THRESHOLD_KEYS.get(key, key)
+        if level not in _THRESHOLD_LEVELS:
+            raise ValueError(f"Unknown policy threshold: {key!r}")
+        if level in normalized:
+            raise ValueError(f"Policy threshold {level!r} is set more than once")
+        normalized[level] = value
+    return normalized
+
+
 @dataclass
 class PolicyRule:
     id: str
@@ -66,6 +103,9 @@ class PolicyConfig:
     rules: list[PolicyRule] = field(default_factory=list)
     thresholds: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_THRESHOLDS))
 
+    def __post_init__(self) -> None:
+        self.thresholds = {**_DEFAULT_THRESHOLDS, **_normalize_thresholds(self.thresholds)}
+
 
 class PolicyEngine:
     def __init__(self, config: PolicyConfig) -> None:
@@ -73,18 +113,10 @@ class PolicyEngine:
 
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> "PolicyEngine":
-        import yaml  # only needed at load time
+        return cls.from_mapping(load_policy_document(path))
 
-        resolved = Path(path) if path else Path(os.environ.get("POLICY_PATH", _BUNDLED_POLICY))
-        if not resolved.exists():
-            raise FileNotFoundError(f"Policy file does not exist: {resolved}")
-
-        with resolved.open() as fh:
-            raw = yaml.safe_load(fh) or {}
-
-        if not isinstance(raw, dict):
-            raise ValueError("Policy root must be a mapping")
-
+    @classmethod
+    def from_mapping(cls, raw: dict[str, Any]) -> "PolicyEngine":
         raw_rules = raw.get("rules")
         if not isinstance(raw_rules, list) or not raw_rules:
             raise ValueError("Policy must define at least one rule")
@@ -114,26 +146,31 @@ class PolicyEngine:
         raw_thresholds = raw.get("thresholds", {})
         if not isinstance(raw_thresholds, dict):
             raise ValueError("Policy thresholds must be a mapping")
-        thresholds = {**_DEFAULT_THRESHOLDS, **raw_thresholds}
-        values = [thresholds[name] for name in ("route_hardened", "strip_tools", "block")]
-        if not all(isinstance(value, (int, float)) and 0 <= value <= 1 for value in values):
+        thresholds = {**_DEFAULT_THRESHOLDS, **_normalize_thresholds(raw_thresholds)}
+        values = [thresholds[name] for name in _THRESHOLD_LEVELS]
+        if not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
+            for value in values
+        ):
             raise ValueError("Policy thresholds must be numbers between 0 and 1")
         if values != sorted(values):
-            raise ValueError(
-                "Policy thresholds must satisfy route_hardened <= strip_tools <= block"
-            )
+            raise ValueError("Policy thresholds must satisfy elevated <= high <= critical")
         return cls(PolicyConfig(rules=rules, thresholds=thresholds))
 
-    def evaluate(self, features: dict[str, Any]) -> tuple[float, Action, list[str]]:
-        """Return (risk_score, action, matched_rule_ids)."""
+    def assess(self, features: dict[str, Any]) -> tuple[float, RiskLevel, list[str]]:
+        """Return (risk_score, risk_level, matched_rule_ids)."""
         matched: list[PolicyRule] = []
         for rule in self._config.rules:
             if self._matches(rule.when, features):
                 matched.append(rule)
 
         risk_score = max((r.score for r in matched), default=0.0)
-        action = self._score_to_action(risk_score)
-        return risk_score, action, [r.id for r in matched]
+        return risk_score, self._score_to_level(risk_score), [r.id for r in matched]
+
+    def evaluate(self, features: dict[str, Any]) -> tuple[float, Action, list[str]]:
+        """Return (risk_score, legacy action, matched_rule_ids)."""
+        risk_score, level, matched = self.assess(features)
+        return risk_score, LEGACY_ACTIONS[level], matched
 
     def _matches(self, conditions: dict[str, Any], features: dict[str, Any]) -> bool:
         for key, expected in conditions.items():
@@ -142,12 +179,34 @@ class PolicyEngine:
                 return False
         return True
 
-    def _score_to_action(self, score: float) -> Action:
+    def _score_to_level(self, score: float) -> RiskLevel:
         t = self._config.thresholds
-        if score >= t.get("block", 0.9):
-            return "block"
-        if score >= t.get("strip_tools", 0.7):
-            return "strip-tools"
-        if score >= t.get("route_hardened", 0.4):
-            return "route-hardened"
-        return "allow"
+        if score >= t["critical"]:
+            return "critical"
+        if score >= t["high"]:
+            return "high"
+        if score >= t["elevated"]:
+            return "elevated"
+        return "low"
+
+
+def load_policy_document(path: str | Path | None = None) -> dict[str, Any]:
+    """Read the policy YAML once; PolicyEngine and RoutingTable both parse it."""
+    import yaml  # only needed at load time
+
+    resolved = Path(path) if path else Path(os.environ.get("POLICY_PATH", _BUNDLED_POLICY))
+    if not resolved.exists():
+        raise FileNotFoundError(f"Policy file does not exist: {resolved}")
+
+    with resolved.open() as fh:
+        raw = yaml.safe_load(fh) or {}
+
+    if not isinstance(raw, dict):
+        raise ValueError("Policy root must be a mapping")
+    unknown = set(raw) - _POLICY_SECTIONS
+    if unknown:
+        raise ValueError(f"Unknown policy sections: {sorted(unknown)}")
+    return raw
+
+
+_POLICY_SECTIONS = {"thresholds", "rules", "routes", "matrix"}

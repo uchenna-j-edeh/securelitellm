@@ -228,3 +228,51 @@ def test_bundled_policy_blocks_legacy_function_calling():
     _, action, matched = engine.evaluate({"legacy_function_calling": True})
     assert action == "block"
     assert "legacy_function_calling" in matched
+
+
+# ---------------------------------------------------------------------------
+# Risk levels and threshold names (#140)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "thresholds",
+    [
+        {"route_hardened": 0.4, "strip_tools": 0.7, "block": 0.9},
+        {"elevated": 0.4, "high": 0.7, "critical": 0.9},
+    ],
+)
+@pytest.mark.parametrize(
+    "score, level",
+    [(0.0, "low"), (0.39, "low"), (0.4, "elevated"), (0.7, "high"), (0.9, "critical")],
+)
+def test_legacy_and_new_threshold_names_agree(thresholds, score, level):
+    engine = _engine([{"id": "r", "when": {"untrusted_seen": True}, "score": score}], thresholds)
+    _, assessed, _ = engine.assess({"untrusted_seen": True})
+    assert assessed == level
+
+
+@pytest.mark.parametrize(
+    "thresholds, error",
+    [
+        ("{elevated: 0.4, route_hardened: 0.5}", "more than once"),
+        ("{severe: 0.5}", "Unknown policy threshold"),
+        ("{elevated: true}", "between 0 and 1"),
+        ("{elevated: 0.8, high: 0.4}", "elevated <= high <= critical"),
+    ],
+)
+def test_from_yaml_rejects_bad_thresholds(tmp_path, thresholds, error):
+    policy_file = tmp_path / "bad-policy.yaml"
+    policy_file.write_text(
+        f"thresholds: {thresholds}\n"
+        "rules:\n  - id: ok\n    when: {untrusted_seen: true}\n    score: 0.5"
+    )
+    with pytest.raises(ValueError, match=error):
+        PolicyEngine.from_yaml(policy_file)
+
+
+def test_from_yaml_rejects_unknown_sections(tmp_path):
+    policy_file = tmp_path / "typo-policy.yaml"
+    policy_file.write_text("rule:\n  - id: ok\n    when: {untrusted_seen: true}\n    score: 0.5")
+    with pytest.raises(ValueError, match="Unknown policy sections"):
+        PolicyEngine.from_yaml(policy_file)

@@ -25,7 +25,10 @@
       }
     },
     "risk_score": { "type": "number", "minimum": 0, "maximum": 1 },
-    "action":     { "type": "string", "enum": ["allow", "route-hardened", "strip-tools", "block"] },
+    "risk_level": { "type": "string", "enum": ["low", "elevated", "high", "critical"], "description": "Risk level from the policy thresholds (#140)" },
+    "data_class": { "type": "string", "enum": ["public"], "description": "Data classification of the request context (#140, #181)" },
+    "route":      { "type": "string", "description": "Route chosen by the admin routing table, or 'block' (#140)" },
+    "action":     { "type": "string", "enum": ["allow", "route-hardened", "strip-tools", "block"], "description": "Legacy action label derived from the route" },
     "latency_ms": { "type": "number", "minimum": 0, "description": "Hook processing time in milliseconds" },
     "tool_context": {
       "type": "object",

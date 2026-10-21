@@ -6,6 +6,7 @@ M2 — session ID hardened; session taint store wired; L0/L1 features populated;
      async_post_call_success_hook added to close the taint loop.
 M3 — classifier integrated at L2/L3; classifier_verdicts added to features.
 M4 — policy engine wired; routing actions allow/route-hardened/strip-tools/block.
+#140 — risk score → risk level → route, from the admin routing table in the policy.
 M5 — generated non-streaming tool calls are re-evaluated before release and
      mapped to execute/hold/block; streaming tool requests fail closed.
 
@@ -31,7 +32,8 @@ from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
-from router.policy import PolicyEngine, PolicyViolation
+from router.policy import PolicyEngine, PolicyViolation, load_policy_document
+from router.routing import RoutingTable
 from router.session import (
     SessionError,
     SessionExpired,
@@ -150,9 +152,15 @@ class RouterHook(CustomLogger):
         self.config = RouterConfig.from_env()
         self.decision_logger = DecisionLogger(self.config.log_path)
         self._classifier: BaseClassifier | None = _init_classifier(self.config.classifier_backend)
-        self._policy = PolicyEngine.from_yaml(self.config.policy_path or None)
+        policy_document = load_policy_document(self.config.policy_path or None)
+        self._policy = PolicyEngine.from_mapping(policy_document)
+        self._routing = RoutingTable.from_mapping(
+            policy_document, legacy_hardened_model=self.config.hardened_model
+        )
         self._issued: OrderedDict[str, str] = OrderedDict()
-        self.decision_logger.emit(self.config.startup_record())
+        self.decision_logger.emit(
+            {**self.config.startup_record(), "routing": self._routing.summary()}
+        )
 
     def _issue_session(self, request_id: str, owner: str) -> _Session:
         raw = get_store().issue(owner)
@@ -334,12 +342,15 @@ class RouterHook(CustomLogger):
                 "classifier_injection", False
             ) or features.get("classifier_error", False)
 
-        # M4: evaluate policy rules → risk score → action
-        risk_score, action, matched_rules = self._policy.evaluate(features)
+        # M4: evaluate policy rules → risk score → risk level → route (#140)
+        risk_score, risk_level, matched_rules = self._policy.assess(features)
+        data_class = "public"
+        route = self._routing.resolve(risk_level, data_class)
+        action = route.legacy_action
 
-        # Escalation counter (session mode only, non-allow actions)
+        # Escalation counter (session mode only, any policy hit)
         escalation_count = 0
-        if self.config.mode == "session" and action != "allow":
+        if self.config.mode == "session" and risk_level != "low":
             escalation_count = get_store().record_escalation(session_id)
             features["escalation_count"] = escalation_count
 
@@ -357,6 +368,9 @@ class RouterHook(CustomLogger):
                 "level": self.config.level,
                 "features": features,
                 "risk_score": round(risk_score, 4),
+                "risk_level": risk_level,
+                "data_class": data_class,
+                "route": route.name,
                 "action": action,
                 "matched_rules": matched_rules,
                 "enforce": self.config.enforce,
@@ -369,8 +383,8 @@ class RouterHook(CustomLogger):
         if not self.config.enforce:
             return data
 
-        # Enforcement
-        if action == "block":
+        # Enforcement: apply the route's controls
+        if route.blocks:
             import litellm.exceptions as _le
 
             raise _le.BadRequestError(
@@ -379,7 +393,7 @@ class RouterHook(CustomLogger):
                 llm_provider="",
             )
 
-        if action == "strip-tools":
+        if route.strips_tools:
             data = dict(data)
             data.pop("tools", None)
             data.pop("functions", None)
@@ -388,9 +402,9 @@ class RouterHook(CustomLogger):
             # instead of generating a tool call that the API will reject.
             data["tool_choice"] = "none"
 
-        if action == "route-hardened":
+        if route.model is not None:
             data = dict(data)
-            data["model"] = self.config.hardened_model
+            data["model"] = route.model
 
         return data
 
@@ -458,14 +472,18 @@ class RouterHook(CustomLogger):
                 [_response_sink_message(egress_sinks)],
             )
 
-        risk_score, policy_action, matched_rules = self._policy.evaluate(features)
-        output_action = _output_action(policy_action)
+        risk_score, risk_level, matched_rules = self._policy.assess(features)
+        data_class = "public"
+        route = self._routing.resolve(risk_level, data_class)
+        policy_action = route.legacy_action
+        # Any policy hit holds generated sink calls, whatever the route (pre-#140 behavior).
+        output_action = "block" if route.blocks else "execute" if risk_level == "low" else "hold"
 
         if self.config.mode == "session":
             store = get_store()
             for sink in egress_sinks:
                 store.record_sink(session_id, _public_sink(sink))
-            if policy_action != "allow":
+            if risk_level != "low":
                 features["escalation_count"] = store.record_escalation(session_id)
 
         self.decision_logger.emit(
@@ -478,6 +496,9 @@ class RouterHook(CustomLogger):
                 "level": self.config.level,
                 "features": features,
                 "risk_score": round(risk_score, 4),
+                "risk_level": risk_level,
+                "data_class": data_class,
+                "route": route.name,
                 "action": output_action,
                 "policy_action": policy_action,
                 "matched_rules": matched_rules,
@@ -489,9 +510,9 @@ class RouterHook(CustomLogger):
             }
         )
 
-        if not self.config.enforce or policy_action == "allow":
+        if not self.config.enforce or output_action == "execute":
             return None
-        if policy_action == "block":
+        if output_action == "block":
             import litellm.exceptions as _le
 
             raise _le.BadRequestError(
@@ -605,14 +626,6 @@ def _response_sink_message(sinks: list[dict[str, Any]]) -> dict[str, Any]:
 def _public_sink(sink: dict[str, Any]) -> dict[str, Any]:
     """Drop raw arguments before logging or retaining a sink."""
     return {key: value for key, value in sink.items() if not key.startswith("_")}
-
-
-def _output_action(policy_action: str) -> str:
-    if policy_action == "allow":
-        return "execute"
-    if policy_action == "block":
-        return "block"
-    return "hold"
 
 
 def _hold_response_tool_calls(

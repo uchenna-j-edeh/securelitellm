@@ -1,16 +1,17 @@
 # SecureLiteLLM default routing policy
 #
 # Risk score = max score of all matching rules.
-# Actions by threshold:
-#   score >= block       → block (reject the request)
-#   score >= strip_tools → strip-tools (remove tool definitions)
-#   score >= route_hardened → route-hardened (redirect to ROUTER_HARDENED_MODEL)
-#   score <  route_hardened → allow
+# Risk level by threshold, and the route each level takes (#140):
+#   score >= critical → critical → block (reject the request)
+#   score >= high     → high     → quarantine (remove tool definitions)
+#   score >= elevated → elevated → hardened (redirect to ROUTER_HARDENED_MODEL)
+#   score <  elevated → low      → standard (unchanged)
+# This file has no routes/matrix sections, so the built-in table above applies.
 
 thresholds:
-  route_hardened: 0.4
-  strip_tools: 0.7
-  block: 0.9
+  elevated: 0.4
+  high: 0.7
+  critical: 0.9
 
 rules:
   # Streaming tool calls cannot be synchronously inspected by the current
