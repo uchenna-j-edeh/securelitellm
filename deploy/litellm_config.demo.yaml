@@ -1,0 +1,54 @@
+# Demo LiteLLM config (docker-compose.demo-dual.yml). Same as
+# litellm_config.yaml except the quarantine group, which is served by the local
+# Ollama model instead of the mock. Keep the two in sync.
+
+model_list:
+  - model_name: mock
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://mock-model:8001/v1
+      api_key: "sk-fake"
+
+  # Routing tier (#140): requests at elevated risk are sent to this group.
+  # It points at the mock model so the eval and demo stay deterministic; the
+  # route's controls are enforced by the hook, not by the model.
+  - model_name: hardened
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://mock-model:8001/v1
+      api_key: "sk-fake"
+    model_info:
+      supports_function_calling: true
+
+  # Routing tier (#183): high-risk requests are sent to this group with tools
+  # removed, and served by a local model so that context never leaves the
+  # machine. The model is pulled by the ollama-pull service.
+  - model_name: quarantine
+    litellm_params:
+      model: ollama_chat/qwen2.5:1.5b
+      api_base: http://ollama:11434
+
+  # Groq free tier (confirmed working model for this key):
+  - model_name: groq
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
+  # OSS 120B — large open-source model, less restricted than Qwen
+  - model_name: gpt
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+
+  # Alias "llm" → groq so existing tests keep working
+  - model_name: llm
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
+litellm_settings:
+  drop_params: true
+  callbacks: ["router.hook.proxy_handler_instance"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

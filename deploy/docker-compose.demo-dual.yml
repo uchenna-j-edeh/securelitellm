@@ -16,14 +16,45 @@
 #
 #   session proxy    → http://localhost:4000   (catches delayed exfil)
 #   stateless proxy  → http://localhost:4001   (misses delayed exfil)
+#
+# Both proxies use litellm_config.demo.yaml, where the quarantine model group
+# is a local Ollama model (#183): high-risk context never leaves the machine.
+# First start pulls the model (~1 GB) into a named volume.
 
 services:
+  ollama:
+    image: ollama/ollama@sha256:1bef639749741b375e9a1eb2c1346fb57ce52f5432de1f74846e44ccc18e1687  # 0.40.0
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-shot: pull the quarantine model, then exit. Proxies wait for it.
+  ollama-pull:
+    image: ollama/ollama@sha256:1bef639749741b375e9a1eb2c1346fb57ce52f5432de1f74846e44ccc18e1687  # 0.40.0
+    entrypoint: ["ollama", "pull", "qwen2.5:1.5b"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  litellm:
+    volumes:
+      - ./litellm_config.demo.yaml:/app/config.yaml:ro
+    depends_on:
+      ollama-pull:
+        condition: service_completed_successfully
+
   litellm-stateless:
     image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
     ports:
       - "127.0.0.1:4001:4000"
     volumes:
-      - ./litellm_config.yaml:/app/config.yaml:ro
+      - ./litellm_config.demo.yaml:/app/config.yaml:ro
       - ..:/workspace:ro
     command: --config /app/config.yaml --port 4000
     environment:
@@ -44,8 +75,13 @@ services:
         condition: service_healthy
       local-classifier:
         condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+volumes:
+  ollama_models:

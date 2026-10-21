@@ -20,6 +20,13 @@ model_list:
       model: groq/qwen/qwen3.8-27b
       api_key: os.environ/GROQ_API_KEY
 
+  # Routing tier (#183): high-risk requests, tools removed. Groq until a
+  # self-hosted model exists, so production needs no extra infrastructure.
+  - model_name: quarantine
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
 litellm_settings:
   drop_params: true
   callbacks: ["router.hook.proxy_handler_instance"]

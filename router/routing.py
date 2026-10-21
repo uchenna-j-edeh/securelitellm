@@ -6,7 +6,7 @@ The policy file declares routes and a matrix:
     routes:
       standard:   { model: requested }            # keep the client's model
       hardened:   { model: hardened }
-      quarantine: { model: requested, tools: none }
+      quarantine: { model: quarantine, tools: none }
 
     matrix:
       low:      { public: standard }

@@ -42,7 +42,7 @@ Docker: LiteLLM + SecureLiteLLM hook
     `-- mock model :8001 (fallback/evaluation; not the primary live-demo model)
     |
     v
-Groq API: model alias `llama` -> `groq/openai/gpt-oss-120b`
+Groq API: model alias `gpt` -> `groq/openai/gpt-oss-120b`
 
 When the model generates a tool call:
 

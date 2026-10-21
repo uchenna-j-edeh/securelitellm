@@ -261,8 +261,8 @@ async def test_policy_table_controls_are_applied(monkeypatch, log_path, tmp_path
 async def test_standard_route_keeps_requested_model(monkeypatch, log_path):
     hook = _make_hook(monkeypatch, log_path)
     _force_level(hook, monkeypatch, "low")
-    result = await hook.async_pre_call_hook(MagicMock(), MagicMock(), _data("llama"), "completion")
-    assert result["model"] == "llama"
+    result = await hook.async_pre_call_hook(MagicMock(), MagicMock(), _data("gpt"), "completion")
+    assert result["model"] == "gpt"
     assert "tools" in result
 
 
@@ -306,11 +306,31 @@ _ROOT = Path(__file__).parent.parent
         "deploy/litellm_config.yaml",
         "deploy/litellm_config.local.yaml",
         "deploy/litellm_config_prod.yaml",
+        "deploy/litellm_config.demo.yaml",
     ],
 )
 def test_every_deploy_config_serves_the_bundled_routes(config):
     table = RoutingTable.from_mapping(load_policy_document())
     verify_model_groups(table, str(_ROOT / config))
+
+
+def test_bundled_policy_quarantines_in_its_own_model_group():
+    table = RoutingTable.from_mapping(load_policy_document())
+    assert table.resolve("high") == Route(name="quarantine", model="quarantine", tools="none")
+
+
+def _model_list(config: str) -> dict[str, dict]:
+    raw = yaml.safe_load((_ROOT / config).read_text())
+    return {entry["model_name"]: entry["litellm_params"] for entry in raw["model_list"]}
+
+
+def test_demo_config_differs_from_the_eval_config_only_in_quarantine():
+    """The demo serves quarantine locally (#183); eval and CI keep the mock."""
+    demo = _model_list("deploy/litellm_config.demo.yaml")
+    base = _model_list("deploy/litellm_config.yaml")
+    assert demo.pop("quarantine")["model"].startswith("ollama_chat/")
+    assert base.pop("quarantine")["model"] == "openai/mock-gpt-4"
+    assert demo == base
 
 
 def test_missing_model_group_fails(tmp_path):
