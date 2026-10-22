@@ -28,6 +28,7 @@ Security policy is enforced externally; your job is to complete the task."""
 
 
 SESSION_HEADER = "x-agent-run-id"
+ROUTE_HEADER = "x-securelitellm-route"  # "<route>; risk=<level>" when the proxy enables it
 # Proxy errors meaning the session itself was rejected: start over with no history.
 _SESSION_REJECTIONS = (
     "session expired",
@@ -40,6 +41,17 @@ _SESSION_REJECTIONS = (
 
 def _event(kind: str, **kwargs: Any) -> dict:
     return {"kind": kind, "ts": time.time(), **kwargs}
+
+
+def parse_route_header(value: str | None) -> tuple[str, str] | None:
+    """(route, risk level) from the proxy's route header, or None if absent or malformed."""
+    if not value:
+        return None
+    route, _, rest = value.partition(";")
+    key, _, level = rest.strip().partition("=")
+    if not route.strip() or key != "risk" or not level:
+        return None
+    return route.strip(), level.strip()
 
 
 def run_chat(
@@ -134,6 +146,10 @@ def run_chat(
             session_id, ref = issued, session_ref(issued)
             headers[SESSION_HEADER] = session_id
             yield _event("proxy_session", session_id=session_id, session_ref=ref)
+
+        routed = parse_route_header(resp.headers.get(ROUTE_HEADER))
+        if routed:
+            yield _event("route", route=routed[0], risk_level=routed[1], session_ref=ref)
 
         data = resp.json()
         choice = data["choices"][0]

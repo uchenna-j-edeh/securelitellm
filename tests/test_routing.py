@@ -517,6 +517,70 @@ async def test_missing_pre_call_level_fails_closed(monkeypatch, log_path, tmp_pa
 
 
 # ---------------------------------------------------------------------------
+# Route header (ROUTER_ROUTE_HEADER)
+# ---------------------------------------------------------------------------
+
+
+async def _route_header(hook, data):
+    headers = await hook.async_post_call_response_headers_hook(data, MagicMock(), MagicMock())
+    return (headers or {}).get("x-securelitellm-route")
+
+
+@pytest.mark.asyncio
+async def test_route_header_is_off_by_default(monkeypatch, log_path, tmp_path):
+    hook = _controls_hook(monkeypatch, log_path, tmp_path)
+    _force_level(hook, monkeypatch, "elevated")
+    data = _data()
+    await hook.async_pre_call_hook(MagicMock(), MagicMock(), data, "completion")
+    assert await _route_header(hook, data) is None
+    assert _records(log_path)[0]["route_header"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "level, expected",
+    [("low", "standard; risk=low"), ("elevated", "hardened; risk=elevated")],
+)
+async def test_route_header_reports_the_route(monkeypatch, log_path, tmp_path, level, expected):
+    monkeypatch.setenv("ROUTER_ROUTE_HEADER", "true")
+    hook = _controls_hook(monkeypatch, log_path, tmp_path)
+    _force_level(hook, monkeypatch, level)
+    data = _data()
+    await hook.async_pre_call_hook(MagicMock(), MagicMock(), data, "completion")
+    assert await _route_header(hook, data) == expected
+
+
+@pytest.mark.asyncio
+async def test_route_header_reports_post_call_escalation(monkeypatch, log_path, tmp_path):
+    monkeypatch.setenv("ROUTER_ROUTE_HEADER", "true")
+    hook = _controls_hook(monkeypatch, log_path, tmp_path)
+    _assess_sequence(hook, monkeypatch, "low", "high")
+    data = _data()
+    await hook.async_pre_call_hook(MagicMock(), MagicMock(), data, "completion")
+    await hook.async_post_call_success_hook(MagicMock(), data, _tool_response())
+    assert await _route_header(hook, data) == "quarantine; risk=high"
+
+
+@pytest.mark.asyncio
+async def test_route_header_ignores_a_request_without_a_route(monkeypatch, log_path, tmp_path):
+    monkeypatch.setenv("ROUTER_ROUTE_HEADER", "true")
+    hook = _controls_hook(monkeypatch, log_path, tmp_path)
+    data = _data()
+    data["metadata"]["securelitellm_route"] = {"risk_level": "nonsense", "route": "x"}
+    assert await _route_header(hook, data) is None
+
+
+def test_lock_rejects_the_route_header(monkeypatch):
+    monkeypatch.setenv("ROUTER_ROUTE_HEADER", "true")
+    monkeypatch.setenv("ROUTER_LOCK", "true")
+    monkeypatch.setenv("CLASSIFIER_BACKEND", "mock")
+    from router.config import RouterConfig
+
+    with pytest.raises(ValueError, match="route_header"):
+        RouterConfig.from_env()
+
+
+# ---------------------------------------------------------------------------
 # Model group checks (#85)
 # ---------------------------------------------------------------------------
 
