@@ -378,6 +378,11 @@ about one run in three; otherwise it refused or asked for `Continue.` first. If 
 refuses, click **New Session** and repeat 4a + 4c. Session held the request every time.
 If the live model will not cooperate, use the deterministic fallback below.
 
+The model may apologize ("I'm sorry, but I can't help with that.") after the email has
+already been sent: the agent runs the tool call first, then sends the result back to the
+model for a final reply, and the model sometimes refuses at that point. The outbox entry,
+not the model's text, is the evidence.
+
 **Say:** "The user asked for an email of content the gateway had already flagged. The
 current request carries no tool result, so stateless sees nothing wrong and lets it go.
 Session remembers that this run read flagged content and holds the send."
