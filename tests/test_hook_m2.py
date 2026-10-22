@@ -309,11 +309,12 @@ async def test_post_call_noop_in_stateless_mode(hook_stateless, monkeypatch):
 async def test_generated_clean_sink_is_executed(hook_enforcing, log_path):
     response = make_response(arguments='{"to":"owner@example.com"}')
     data = make_data([{"role": "user", "content": "Email my report"}], session_id="clean")
+    await pre_call(hook_enforcing, data)
 
     result = await hook_enforcing.async_post_call_success_hook(MagicMock(), data, response)
 
     assert result is None
-    record = read_record(log_path)
+    record = read_record(log_path, n=1)
     assert record["phase"] == "post_call"
     assert record["action"] == "execute"
 
@@ -360,10 +361,7 @@ async def test_generated_untrusted_sink_is_held(hook_enforcing, log_path):
 
 @pytest.mark.asyncio
 async def test_generated_read_only_tool_is_not_held(hook_enforcing, log_path):
-    data = make_data(
-        [{"role": "tool", "tool_call_id": "source-1", "content": "untrusted"}],
-        session_id="read-only",
-    )
+    data = make_data([{"role": "user", "content": "Check my inbox"}], session_id="read-only")
     await pre_call(hook_enforcing, data)
 
     result = await hook_enforcing.async_post_call_success_hook(
@@ -372,6 +370,24 @@ async def test_generated_read_only_tool_is_not_held(hook_enforcing, log_path):
 
     assert result is None
     assert len(_request_records(log_path)) == 1
+
+
+@pytest.mark.asyncio
+async def test_quarantine_holds_generated_read_only_tool(hook_enforcing, log_path):
+    """Quarantine holds every generated call, read-only ones included (#140)."""
+    data = make_data(
+        [{"role": "tool", "tool_call_id": "source-1", "content": "untrusted"}],
+        session_id="read-only-quarantine",
+    )
+    await pre_call(hook_enforcing, data)
+
+    held = await hook_enforcing.async_post_call_success_hook(
+        MagicMock(), data, make_response(name="read_email")
+    )
+
+    assert held.choices[0].message.tool_calls is None
+    record = read_record(log_path, n=1)
+    assert (record["route"], record["action"]) == ("quarantine", "hold")
 
 
 @pytest.mark.parametrize(
@@ -454,13 +470,14 @@ async def test_malformed_tool_call_audit_mode_logs_only(hook_session, log_path):
 @pytest.mark.asyncio
 async def test_well_formed_no_argument_call_is_not_malformed(hook_enforcing, log_path):
     data = make_data([{"role": "user", "content": "Email my report"}], session_id="no-args")
+    await pre_call(hook_enforcing, data)
 
     result = await hook_enforcing.async_post_call_success_hook(
         MagicMock(), data, make_response(arguments="")
     )
 
     assert result is None
-    record = read_record(log_path)
+    record = read_record(log_path, n=1)
     assert record["action"] == "execute"
     assert record["features"]["malformed_tool_call"] is False
 

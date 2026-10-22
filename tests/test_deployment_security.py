@@ -114,3 +114,13 @@ def test_demo_serves_quarantine_from_the_pulled_local_model():
     demo = load_yaml("deploy/litellm_config.demo.yaml")
     quarantine = next(m for m in demo["model_list"] if m["model_name"] == "quarantine")
     assert quarantine["litellm_params"]["model"] == f"ollama_chat/{pulled}"
+
+
+def test_route_header_is_enabled_only_for_the_demo():
+    """The route header lets a caller probe the classifier; ROUTER_LOCK rejects it."""
+    base = load_yaml("deploy/docker-compose.yml")["services"]["litellm"]["environment"]
+    assert not any(item.startswith("ROUTER_ROUTE_HEADER") for item in base)
+    assert "ROUTER_ROUTE_HEADER" not in (ROOT / "deploy/Dockerfile").read_text()
+    demo = load_yaml("deploy/docker-compose.demo-dual.yml")["services"]
+    for name in ("litellm", "litellm-stateless"):
+        assert "ROUTER_ROUTE_HEADER=true" in demo[name]["environment"], name

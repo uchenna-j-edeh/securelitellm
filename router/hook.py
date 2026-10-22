@@ -7,6 +7,9 @@ M2 — session ID hardened; session taint store wired; L0/L1 features populated;
 M3 — classifier integrated at L2/L3; classifier_verdicts added to features.
 M4 — policy engine wired; routing actions allow/route-hardened/strip-tools/block.
 #140 — risk score → risk level → route, from the admin routing table in the policy.
+     Route controls: model group, tool removal, safety prompt, and holds on
+     generated tool calls. Post-call routes on the higher of the pre-call and
+     post-call risk levels, so a request is never relaxed after the model call.
 M5 — generated non-streaming tool calls are re-evaluated before release and
      mapped to execute/hold/block; streaming tool requests fail closed.
 
@@ -33,7 +36,13 @@ from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
-from router.policy import PolicyEngine, PolicyViolation, load_policy_document
+from router.policy import (
+    RISK_LEVELS,
+    PolicyEngine,
+    PolicyViolation,
+    RiskLevel,
+    load_policy_document,
+)
 from router.routing import Route, RoutingTable, verify_model_groups
 from router.session import (
     SessionError,
@@ -51,6 +60,13 @@ from router.taint import (
 )
 
 SESSION_HEADER = "x-agent-run-id"
+ROUTE_HEADER = "x-securelitellm-route"  # "<route>; risk=<level>", when ROUTER_ROUTE_HEADER=true
+# Pre-call writes its risk level here for post-call, and post-call updates it
+# with the final route for the route header. The key lives in LiteLLM's
+# request metadata (not sent to the model) and pre-call always overwrites it,
+# so a client cannot pre-set it.
+ROUTE_METADATA_KEY = "securelitellm_route"
+_MISSING_PRE_CALL_LEVEL: RiskLevel = "elevated"  # fail closed if pre-call left no level
 _SESSION_START_ROLES = frozenset({"system", "developer", "user"})
 _ISSUED_CACHE_MAX = 10_000  # request_id -> raw id, until the response headers are sent
 
@@ -93,6 +109,40 @@ def _uses_legacy_function_calling(data: dict, messages: list[dict]) -> bool:
     if data.get("functions") is not None or data.get("function_call") is not None:
         return True
     return any(m.get("role") == "function" or m.get("function_call") is not None for m in messages)
+
+
+def _max_level(*levels: RiskLevel) -> RiskLevel:
+    return max(levels, key=RISK_LEVELS.index)
+
+
+def _stamp_route(data: dict, risk_level: RiskLevel, route: Route) -> None:
+    """Record the risk level and route in the request metadata (mutated in place).
+
+    Pre-call writes it for post-call; post-call overwrites it with the final
+    route for the route header.
+    """
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = data["metadata"] = {}
+    metadata[ROUTE_METADATA_KEY] = {"risk_level": risk_level, "route": route.name}
+
+
+def _route_stamp(data: dict) -> dict[str, str] | None:
+    metadata = data.get("metadata")
+    stamp = metadata.get(ROUTE_METADATA_KEY) if isinstance(metadata, dict) else None
+    if not isinstance(stamp, dict) or stamp.get("risk_level") not in RISK_LEVELS:
+        return None
+    return stamp
+
+
+def _pre_call_level(data: dict) -> RiskLevel | None:
+    stamp = _route_stamp(data)
+    return None if stamp is None else stamp["risk_level"]
+
+
+def _with_prompt(messages: list[dict], prompt: str) -> list[dict]:
+    """Send the route's safety prompt as a system message ahead of the conversation."""
+    return [{"role": "system", "content": prompt}, *messages]
 
 
 def _is_session_start(messages: list[dict]) -> bool:
@@ -288,9 +338,20 @@ class RouterHook(CustomLogger):
         request_headers: dict[str, str] | None = None,
         litellm_call_info: dict[str, object] | None = None,
     ) -> dict[str, str] | None:
-        """Return a newly issued session id to the client — the only time it is sent."""
+        """Return a newly issued session id (the only time it is sent) and, if enabled, the route.
+
+        LiteLLM calls this after the post-call hook, so the route reflects any
+        post-call escalation.
+        """
+        headers: dict[str, str] = {}
         raw = self._issued.pop(data.get("litellm_call_id") or "", None)
-        return {SESSION_HEADER: raw} if raw else None
+        if raw:
+            headers[SESSION_HEADER] = raw
+        if self.config.route_header:
+            stamp = _route_stamp(data)
+            if stamp is not None:
+                headers[ROUTE_HEADER] = f"{stamp['route']}; risk={stamp['risk_level']}"
+        return headers or None
 
     async def async_pre_call_hook(
         self,
@@ -380,6 +441,7 @@ class RouterHook(CustomLogger):
         data_class = "public"
         route = self._routing.resolve(risk_level, data_class)
         action = route.legacy_action
+        _stamp_route(data, risk_level, route)
 
         # Escalation counter (session mode only, any policy hit)
         escalation_count = 0
@@ -435,6 +497,11 @@ class RouterHook(CustomLogger):
             # instead of generating a tool call that the API will reject.
             data["tool_choice"] = "none"
 
+        prompt = self._routing.prompt_text(route)
+        if prompt is not None:
+            data = dict(data)
+            data["messages"] = _with_prompt(messages, prompt)
+
         if route.model is not None:
             self._check_live_model_group(route, data, request_id)
             data = dict(data)
@@ -455,18 +522,26 @@ class RouterHook(CustomLogger):
         blocked by raising PolicyViolation. Streaming tool requests are blocked
         in the pre-call hook because CustomLogger post-call streaming callbacks
         run after content has already reached the client.
+
+        The route is resolved from the higher of the pre-call and post-call
+        risk levels, and its hold control applies whatever the post-call score.
         """
         request_id = data.get("litellm_call_id") or ""
         messages = data.get("messages", [])
 
-        egress_sinks = _extract_response_sinks(response)
-        if not egress_sinks:
+        generated_calls = _extract_response_sinks(response, include_reads=True)
+        if not generated_calls:
             return None
+        egress_sinks = [c for c in generated_calls if c["category"] != "read" or "malformed" in c]
+        pre_level = _pre_call_level(data)
+        pre_route = self._routing.resolve(pre_level or _MISSING_PRE_CALL_LEVEL)
+        if not egress_sinks and pre_route.hold != "all":
+            return None  # read-only calls are released unless the route holds everything
         session = self._resolve_session(data, request_id, user_api_key_dict, messages, "post_call")
         session_id = session.key
 
         features = _extract_features(session_id, messages, self.config.level, self.config.mode)
-        features["sink_requested"] = True
+        features["sink_requested"] = bool(egress_sinks)
         features["streaming_tool_request"] = False
         features["malformed_tool_call"] = any("malformed" in s for s in egress_sinks)
 
@@ -506,18 +581,19 @@ class RouterHook(CustomLogger):
                 [_response_sink_message(egress_sinks)],
             )
 
-        risk_score, risk_level, matched_rules = self._policy.assess(features)
+        risk_score, assessed_level, matched_rules = self._policy.assess(features)
+        risk_level = _max_level(assessed_level, pre_level or _MISSING_PRE_CALL_LEVEL)
         data_class = "public"
         route = self._routing.resolve(risk_level, data_class)
         policy_action = route.legacy_action
-        # Any policy hit holds generated sink calls, whatever the route (pre-#140 behavior).
-        output_action = "block" if route.blocks else "execute" if risk_level == "low" else "hold"
+        output_action = _output_action(route, assessed_level, generated_calls, egress_sinks)
+        _stamp_route(data, risk_level, route)  # the route header reports the final route
 
         if self.config.mode == "session":
             store = get_store()
             for sink in egress_sinks:
                 store.record_sink(session_id, _public_sink(sink))
-            if risk_level != "low":
+            if assessed_level != "low":
                 features["escalation_count"] = store.record_escalation(session_id)
 
         self.decision_logger.emit(
@@ -531,6 +607,8 @@ class RouterHook(CustomLogger):
                 "features": features,
                 "risk_score": round(risk_score, 4),
                 "risk_level": risk_level,
+                "assessed_risk_level": assessed_level,
+                "pre_call_risk_level": pre_level,
                 "data_class": data_class,
                 "route": route.name,
                 "action": output_action,
@@ -538,8 +616,8 @@ class RouterHook(CustomLogger):
                 "matched_rules": matched_rules,
                 "enforce": self.config.enforce,
                 "tool_context": {
-                    "generated_tool_call_count": len(egress_sinks),
-                    "generated_tool_calls": [_public_sink(sink) for sink in egress_sinks],
+                    "generated_tool_call_count": len(generated_calls),
+                    "generated_tool_calls": [_public_sink(call) for call in generated_calls],
                 },
             }
         )
@@ -554,7 +632,26 @@ class RouterHook(CustomLogger):
                 model=data.get("model", ""),
                 llm_provider="",
             )
-        return _hold_response_tool_calls(response, risk_score, matched_rules)
+        return _hold_response_tool_calls(
+            response, risk_score, matched_rules or [f"route {route.name}"]
+        )
+
+
+def _output_action(
+    route: Route,
+    assessed_level: RiskLevel,
+    generated_calls: list[dict[str, Any]],
+    egress_sinks: list[dict[str, Any]],
+) -> str:
+    """execute / hold / block for the generated tool calls of one response."""
+    if route.blocks:
+        return "block"
+    if route.hold == "all" and generated_calls:
+        return "hold"
+    if egress_sinks and (route.hold == "sinks" or assessed_level != "low"):
+        # Any post-call policy hit holds sink calls, whatever the route (pre-#140 behavior).
+        return "hold"
+    return "execute"
 
 
 def _init_classifier(backend: str) -> BaseClassifier | None:
@@ -604,12 +701,13 @@ async def _classify_sources(
     return await asyncio.gather(*[_one(s) for s in sources])
 
 
-def _extract_response_sinks(response: Any) -> list[dict[str, Any]]:
+def _extract_response_sinks(response: Any, include_reads: bool = False) -> list[dict[str, Any]]:
     """Pull tool_calls out of a LiteLLM completion response object.
 
-    Fails closed (#82, #156): a call whose name or arguments cannot be parsed
-    is returned as a sink with ``malformed`` set — even if its name looks like
-    a read tool — so policy holds it rather than releasing it uninspected.
+    Read-only calls are skipped unless include_reads is set. Fails closed
+    (#82, #156): a call whose name or arguments cannot be parsed is returned
+    as a sink with ``malformed`` set — even if its name looks like a read
+    tool — so policy holds it rather than releasing it uninspected.
     """
     from router.taint import _sink_category, tool_call_defect
 
@@ -624,7 +722,7 @@ def _extract_response_sinks(response: Any) -> list[dict[str, Any]]:
             arguments = getattr(fn, "arguments", None)
             defect = tool_call_defect(name, arguments)
             category = _sink_category(name) if isinstance(name, str) else "other"
-            if category == "read" and defect is None:
+            if category == "read" and defect is None and not include_reads:
                 continue
             arguments = arguments if isinstance(arguments, str) else ""
             sink = {

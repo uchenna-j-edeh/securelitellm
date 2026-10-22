@@ -42,7 +42,11 @@ services:
       ollama:
         condition: service_healthy
 
+  # The demo UI shows which route answered each model call (#140). Never
+  # enable the route header in production: ROUTER_LOCK rejects it.
   litellm:
+    environment:
+      - ROUTER_ROUTE_HEADER=true
     volumes:
       - ./litellm_config.demo.yaml:/app/config.yaml:ro
     depends_on:
@@ -69,6 +73,7 @@ services:
       - PROMPTGUARD_THRESHOLD=${PROMPTGUARD_THRESHOLD:-0.5}
       - ROUTER_ENFORCE=${ROUTER_ENFORCE:-true}
       - ROUTER_LITELLM_CONFIG=/app/config.yaml
+      - ROUTER_ROUTE_HEADER=true
       - POLICY_PATH=${POLICY_PATH:-/workspace/deploy/policy.yaml}
     depends_on:
       mock-model:

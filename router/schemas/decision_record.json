@@ -28,6 +28,8 @@
     "risk_level": { "type": "string", "enum": ["low", "elevated", "high", "critical"], "description": "Risk level from the policy thresholds (#140)" },
     "data_class": { "type": "string", "enum": ["public"], "description": "Data classification of the request context (#140, #181)" },
     "route":      { "type": "string", "description": "Route chosen by the admin routing table, or 'block' (#140)" },
+    "assessed_risk_level": { "type": "string", "enum": ["low", "elevated", "high", "critical"], "description": "post_call only: level from this phase's own policy assessment" },
+    "pre_call_risk_level": { "type": ["string", "null"], "enum": ["low", "elevated", "high", "critical", null], "description": "post_call only: level pre-call recorded; null if missing (post-call then assumes elevated). risk_level is the higher of the two." },
     "action":     { "type": "string", "enum": ["allow", "route-hardened", "strip-tools", "block"], "description": "Legacy action label derived from the route" },
     "latency_ms": { "type": "number", "minimum": 0, "description": "Hook processing time in milliseconds" },
     "tool_context": {

@@ -74,6 +74,8 @@ class TurnResult:
     history_mode: str = "incremental"  # "incremental" | "full"
     # Decision record fields (None if proxy returned no decision in time)
     action: str = "unknown"
+    risk_level: str = ""  # low | elevated | high | critical ("" if the record has none)
+    route: str = ""
     risk_score: float = 0.0
     matched_rules: list[str] = field(default_factory=list)
     latency_ms: float = 0.0
@@ -199,6 +201,8 @@ def replay_scenario(
         )
         if decision:
             tr.action = decision.get("action", "unknown")
+            tr.risk_level = decision.get("risk_level", "")
+            tr.route = decision.get("route", "")
             tr.risk_score = float(decision.get("risk_score", 0.0))
             tr.matched_rules = decision.get("matched_rules", [])
             tr.latency_ms = float(decision.get("latency_ms", wall_ms))
