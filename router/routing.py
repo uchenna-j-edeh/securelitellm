@@ -22,14 +22,21 @@ proxy refuses to start):
 - the `critical` row is `block` in every column (policy floor, #121).
 
 A policy file without `routes`/`matrix` gets the legacy table, which
-reproduces the pre-#140 actions exactly: low → allow, elevated →
-ROUTER_HARDENED_MODEL, high → strip tools, critical → block.
+reproduces the pre-#140 actions: low → allow, elevated → the `hardened`
+model group, high → strip tools, critical → block. ROUTER_LOCK rejects it.
+
+Every model group a route names must exist in the LiteLLM config
+(ROUTER_LITELLM_CONFIG), and routes that keep tools need deployments that
+support tool calling. verify_model_groups checks this at startup and raises
+RuntimeError, so a misconfigured tier stops the proxy instead of failing on
+the first escalated request (#85).
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from router.policy import LEGACY_ACTIONS, RISK_LEVELS, Action, RiskLevel
@@ -39,6 +46,7 @@ DATA_CLASSES: tuple[DataClass, ...] = ("public",)  # #181 adds internal/sensitiv
 
 BLOCK = "block"
 REQUESTED = "requested"  # route model value: keep the client's requested model
+LEGACY_HARDENED_GROUP = "hardened"
 
 _ROUTE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _ROUTE_KEYS = {"model", "tools"}
@@ -105,11 +113,11 @@ class RoutingTable:
         }
 
     @classmethod
-    def legacy(cls, hardened_model: str) -> "RoutingTable":
+    def legacy(cls) -> "RoutingTable":
         """The pre-#140 behavior, expressed as a routing table."""
         routes = {
             "standard": Route(name="standard"),
-            "hardened": Route(name="hardened", model=hardened_model),
+            "hardened": Route(name="hardened", model=LEGACY_HARDENED_GROUP),
             "quarantine": Route(name="quarantine", tools="none"),
         }
         by_action = {
@@ -126,10 +134,10 @@ class RoutingTable:
         return cls(routes=routes, matrix=matrix, source="legacy")
 
     @classmethod
-    def from_mapping(cls, raw: dict[str, Any], legacy_hardened_model: str) -> "RoutingTable":
+    def from_mapping(cls, raw: dict[str, Any]) -> "RoutingTable":
         has_routes, has_matrix = "routes" in raw, "matrix" in raw
         if not has_routes and not has_matrix:
-            return cls.legacy(legacy_hardened_model)
+            return cls.legacy()
         if has_routes != has_matrix:
             raise ValueError("Policy must define both 'routes' and 'matrix', or neither")
         routes = _parse_routes(raw["routes"])
@@ -214,3 +222,68 @@ def _check_monotonic(matrix: dict[tuple[RiskLevel, DataClass], Route]) -> None:
                     f"Matrix column {dc!r} becomes less restrictive from {lower!r} "
                     f"({a.name}) to {higher!r} ({b.name})"
                 )
+
+
+def verify_model_groups(table: RoutingTable, litellm_config_path: str) -> None:
+    """Fail closed unless every model group the table uses is usable (#85).
+
+    Reads the LiteLLM config file because the hook is constructed before
+    LiteLLM builds its router. Raises RuntimeError on any problem.
+    """
+    used = {route.name: route for route in table.matrix.values() if route.model is not None}
+    if not used:
+        return
+    if not litellm_config_path:
+        raise RuntimeError(
+            "ROUTER_LITELLM_CONFIG must point at the LiteLLM config: routes "
+            f"{sorted(used)} name model groups that have to be checked at startup"
+        )
+    deployments = _load_model_list(Path(litellm_config_path))
+    for route in sorted(used.values(), key=lambda r: r.name):
+        group = deployments.get(route.model or "")
+        if not group:
+            raise RuntimeError(
+                f"Route {route.name!r} uses model group {route.model!r}, which is not in "
+                f"the LiteLLM model_list ({litellm_config_path})"
+            )
+        if route.strips_tools:
+            continue
+        unsupported = [model for model, supported in group if not supported]
+        if unsupported:
+            raise RuntimeError(
+                f"Route {route.name!r} keeps tools, but model group {route.model!r} has "
+                f"deployments without tool calling: {unsupported}. Set "
+                "model_info.supports_function_calling: true if they support it."
+            )
+
+
+def _load_model_list(path: Path) -> dict[str, list[tuple[str, bool]]]:
+    """model_name → [(litellm model, supports tool calling)] from a LiteLLM config."""
+    import litellm
+    import yaml
+
+    try:
+        raw = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError) as exc:
+        raise RuntimeError(f"Cannot read LiteLLM config {path}: {exc}") from exc
+    entries = raw.get("model_list") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        raise RuntimeError(f"LiteLLM config {path} has no model_list")
+
+    groups: dict[str, list[tuple[str, bool]]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("model_name"), str):
+            raise RuntimeError(f"LiteLLM config {path} has a malformed model_list entry")
+        params = entry.get("litellm_params") or {}
+        model = str(params.get("model", "")) if isinstance(params, dict) else ""
+        info = entry.get("model_info") or {}
+        declared = info.get("supports_function_calling") if isinstance(info, dict) else None
+        if isinstance(declared, bool):
+            supported = declared
+        else:
+            try:
+                supported = bool(model) and litellm.supports_function_calling(model)
+            except Exception:
+                supported = False
+        groups.setdefault(entry["model_name"], []).append((model, supported))
+    return groups

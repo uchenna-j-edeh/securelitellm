@@ -16,7 +16,7 @@ critical  score >= critical  (formerly block).
 Legacy actions
 --------------
 allow           Pass through unchanged.
-route-hardened  Redirect to ROUTER_HARDENED_MODEL (a more restricted model alias).
+route-hardened  Redirect to the `hardened` model group.
 strip-tools     Remove tool definitions from the request so the LLM cannot call tools.
 block           Reject the request entirely (raises PolicyViolation).
 

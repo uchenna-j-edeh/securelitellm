@@ -40,7 +40,7 @@ class RouterConfig:
     classifier_backend: ClassifierBackend = "none"
     enforce: bool = True  # secure by default; set false explicitly for audit-only experiments
     policy_path: str = ""  # empty = use bundled deploy/policy.yaml
-    hardened_model: str = "mock"  # model alias to route-hardened requests to
+    litellm_config_path: str = ""  # LiteLLM config whose model_list routes are checked against
     lock: bool = False  # ROUTER_LOCK=true rejects unsafe configs at startup
 
     @classmethod
@@ -51,9 +51,14 @@ class RouterConfig:
         classifier_backend = os.getenv("CLASSIFIER_BACKEND", "none").lower()
         enforce = os.getenv("ROUTER_ENFORCE", "true").lower() in ("1", "true", "yes")
         policy_path = os.getenv("POLICY_PATH", "")
-        hardened_model = os.getenv("ROUTER_HARDENED_MODEL", "mock")
+        litellm_config_path = os.getenv("ROUTER_LITELLM_CONFIG", "")
         lock = os.getenv("ROUTER_LOCK", "false").lower() in ("1", "true", "yes")
 
+        if os.getenv("ROUTER_HARDENED_MODEL") is not None:
+            raise ValueError(
+                "ROUTER_HARDENED_MODEL was removed (#140): define a 'hardened' model group "
+                "in the LiteLLM config and route to it from the policy routing table"
+            )
         if mode not in _VALID_MODES:
             raise ValueError(f"ROUTER_MODE must be one of {_VALID_MODES}, got {mode!r}")
         if level not in _VALID_LEVELS:
@@ -70,7 +75,7 @@ class RouterConfig:
             classifier_backend=classifier_backend,
             enforce=enforce,
             policy_path=policy_path,
-            hardened_model=hardened_model,
+            litellm_config_path=litellm_config_path,
             lock=lock,
         )
 
@@ -91,7 +96,7 @@ class RouterConfig:
             "level": self.level,
             "enforce": self.enforce,
             "classifier_backend": self.classifier_backend,
-            "hardened_model": self.hardened_model,
+            "litellm_config_path": self.litellm_config_path,
             "policy_path": self.policy_path or str(_BUNDLED_POLICY),
             "policy_sha256": _policy_sha256(self.policy_path),
             "lock": self.lock,

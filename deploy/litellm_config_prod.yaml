@@ -12,6 +12,14 @@ model_list:
       model: groq/qwen/qwen3.8-27b
       api_key: os.environ/GROQ_API_KEY
 
+  # Routing tier (#140): requests at elevated risk are sent to this group.
+  # Same model as standard for now; the tier's protection comes from the
+  # controls the hook enforces for the route.
+  - model_name: hardened
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
 litellm_settings:
   drop_params: true
   callbacks: ["router.hook.proxy_handler_instance"]

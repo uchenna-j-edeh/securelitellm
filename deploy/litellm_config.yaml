@@ -5,6 +5,17 @@ model_list:
       api_base: http://mock-model:8001/v1
       api_key: "sk-fake"
 
+  # Routing tier (#140): requests at elevated risk are sent to this group.
+  # It points at the mock model so the eval and demo stay deterministic; the
+  # route's controls are enforced by the hook, not by the model.
+  - model_name: hardened
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://mock-model:8001/v1
+      api_key: "sk-fake"
+    model_info:
+      supports_function_calling: true
+
   # Groq free tier (confirmed working model for this key):
   - model_name: groq
     litellm_params:

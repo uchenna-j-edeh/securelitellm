@@ -13,5 +13,6 @@ COPY deploy/litellm_config_prod.yaml /app/config.yaml
 COPY deploy/policy.yaml /workspace/deploy/policy.yaml
 
 ENV PYTHONPATH=/workspace
+ENV ROUTER_LITELLM_CONFIG=/app/config.yaml
 
 CMD ["--config", "/app/config.yaml", "--port", "4000"]

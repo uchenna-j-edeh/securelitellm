@@ -19,6 +19,7 @@ are rejected. Logs carry session_ref (a hash prefix), never the raw id.
 
 import asyncio
 import copy
+import sys
 import time
 import uuid
 from collections import OrderedDict
@@ -33,7 +34,7 @@ from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
 from router.policy import PolicyEngine, PolicyViolation, load_policy_document
-from router.routing import RoutingTable
+from router.routing import Route, RoutingTable, verify_model_groups
 from router.session import (
     SessionError,
     SessionExpired,
@@ -154,9 +155,10 @@ class RouterHook(CustomLogger):
         self._classifier: BaseClassifier | None = _init_classifier(self.config.classifier_backend)
         policy_document = load_policy_document(self.config.policy_path or None)
         self._policy = PolicyEngine.from_mapping(policy_document)
-        self._routing = RoutingTable.from_mapping(
-            policy_document, legacy_hardened_model=self.config.hardened_model
-        )
+        self._routing = RoutingTable.from_mapping(policy_document)
+        if self.config.lock and self._routing.source == "legacy":
+            raise ValueError("ROUTER_LOCK=true requires the policy to define 'routes' and 'matrix'")
+        verify_model_groups(self._routing, self.config.litellm_config_path)
         self._issued: OrderedDict[str, str] = OrderedDict()
         self.decision_logger.emit(
             {**self.config.startup_record(), "routing": self._routing.summary()}
@@ -246,6 +248,37 @@ class RouterHook(CustomLogger):
                 model=data.get("model", ""),
                 llm_provider="",
             ) from exc
+
+    def _check_live_model_group(self, route: Route, data: dict, request_id: str) -> None:
+        """Reject the request if the route's model group is missing from the live router.
+
+        The startup check reads the config file; this catches groups removed
+        afterwards (e.g. through the LiteLLM database). Outside the proxy
+        (unit tests, scripts) there is no live router and nothing to check.
+        """
+        proxy = sys.modules.get("litellm.proxy.proxy_server")
+        llm_router = getattr(proxy, "llm_router", None)
+        if llm_router is None or route.model in set(llm_router.get_model_names()):
+            return
+        self.decision_logger.emit(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "routing_config_mismatch",
+                "request_id": request_id,
+                "route": route.name,
+                "missing_model_group": route.model,
+            }
+        )
+        import litellm.exceptions as _le
+
+        raise _le.BadRequestError(
+            message=(
+                f"SecureLiteLLM: route {route.name!r} needs model group {route.model!r}, "
+                "which the proxy does not serve"
+            ),
+            model=data.get("model", ""),
+            llm_provider="",
+        )
 
     async def async_post_call_response_headers_hook(
         self,
@@ -403,6 +436,7 @@ class RouterHook(CustomLogger):
             data["tool_choice"] = "none"
 
         if route.model is not None:
+            self._check_live_model_group(route, data, request_id)
             data = dict(data)
             data["model"] = route.model
 
