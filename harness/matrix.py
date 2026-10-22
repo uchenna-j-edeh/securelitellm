@@ -97,6 +97,8 @@ CSV_FIELDS = [
     "matched_rules",
     "latency_ms",
     "proxy_ok",
+    "risk_level",
+    "route",
     # Derived classification columns (filled by metrics.py)
 ]
 
@@ -176,6 +178,8 @@ def _row(mode: str, level: str, history_mode: str, tr: TurnResult) -> dict:
         "matched_rules": "|".join(tr.matched_rules),
         "latency_ms": round(tr.latency_ms, 3),
         "proxy_ok": tr.proxy_ok,
+        "risk_level": tr.risk_level,
+        "route": tr.route,
     }
 
 

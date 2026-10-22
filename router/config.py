@@ -20,6 +20,9 @@ _BUNDLED_POLICY = Path(__file__).parent.parent / "deploy" / "policy.yaml"
 _UNSAFE_IF_LOCKED: list[tuple[str, object]] = [
     ("enforce", False),
     ("classifier_backend", "none"),
+    # The route header tells a caller whether their content was flagged, which
+    # lets them probe the classifier; demo and debugging only.
+    ("route_header", True),
 ]
 
 
@@ -42,6 +45,7 @@ class RouterConfig:
     policy_path: str = ""  # empty = use bundled deploy/policy.yaml
     litellm_config_path: str = ""  # LiteLLM config whose model_list routes are checked against
     lock: bool = False  # ROUTER_LOCK=true rejects unsafe configs at startup
+    route_header: bool = False  # ROUTER_ROUTE_HEADER=true returns x-securelitellm-route
 
     @classmethod
     def from_env(cls) -> "RouterConfig":
@@ -53,6 +57,7 @@ class RouterConfig:
         policy_path = os.getenv("POLICY_PATH", "")
         litellm_config_path = os.getenv("ROUTER_LITELLM_CONFIG", "")
         lock = os.getenv("ROUTER_LOCK", "false").lower() in ("1", "true", "yes")
+        route_header = os.getenv("ROUTER_ROUTE_HEADER", "false").lower() in ("1", "true", "yes")
 
         if os.getenv("ROUTER_HARDENED_MODEL") is not None:
             raise ValueError(
@@ -77,6 +82,7 @@ class RouterConfig:
             policy_path=policy_path,
             litellm_config_path=litellm_config_path,
             lock=lock,
+            route_header=route_header,
         )
 
         if lock:
@@ -100,4 +106,5 @@ class RouterConfig:
             "policy_path": self.policy_path or str(_BUNDLED_POLICY),
             "policy_sha256": _policy_sha256(self.policy_path),
             "lock": self.lock,
+            "route_header": self.route_header,
         }

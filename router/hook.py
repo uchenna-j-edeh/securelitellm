@@ -60,7 +60,9 @@ from router.taint import (
 )
 
 SESSION_HEADER = "x-agent-run-id"
-# Pre-call writes its risk level here for post-call. The key lives in LiteLLM's
+ROUTE_HEADER = "x-securelitellm-route"  # "<route>; risk=<level>", when ROUTER_ROUTE_HEADER=true
+# Pre-call writes its risk level here for post-call, and post-call updates it
+# with the final route for the route header. The key lives in LiteLLM's
 # request metadata (not sent to the model) and pre-call always overwrites it,
 # so a client cannot pre-set it.
 ROUTE_METADATA_KEY = "securelitellm_route"
@@ -114,18 +116,28 @@ def _max_level(*levels: RiskLevel) -> RiskLevel:
 
 
 def _stamp_route(data: dict, risk_level: RiskLevel, route: Route) -> None:
-    """Record the pre-call risk level and route for post-call (mutates metadata in place)."""
+    """Record the risk level and route in the request metadata (mutated in place).
+
+    Pre-call writes it for post-call; post-call overwrites it with the final
+    route for the route header.
+    """
     metadata = data.get("metadata")
     if not isinstance(metadata, dict):
         metadata = data["metadata"] = {}
     metadata[ROUTE_METADATA_KEY] = {"risk_level": risk_level, "route": route.name}
 
 
-def _pre_call_level(data: dict) -> RiskLevel | None:
+def _route_stamp(data: dict) -> dict[str, str] | None:
     metadata = data.get("metadata")
     stamp = metadata.get(ROUTE_METADATA_KEY) if isinstance(metadata, dict) else None
-    level = stamp.get("risk_level") if isinstance(stamp, dict) else None
-    return level if level in RISK_LEVELS else None
+    if not isinstance(stamp, dict) or stamp.get("risk_level") not in RISK_LEVELS:
+        return None
+    return stamp
+
+
+def _pre_call_level(data: dict) -> RiskLevel | None:
+    stamp = _route_stamp(data)
+    return None if stamp is None else stamp["risk_level"]
 
 
 def _with_prompt(messages: list[dict], prompt: str) -> list[dict]:
@@ -326,9 +338,20 @@ class RouterHook(CustomLogger):
         request_headers: dict[str, str] | None = None,
         litellm_call_info: dict[str, object] | None = None,
     ) -> dict[str, str] | None:
-        """Return a newly issued session id to the client — the only time it is sent."""
+        """Return a newly issued session id (the only time it is sent) and, if enabled, the route.
+
+        LiteLLM calls this after the post-call hook, so the route reflects any
+        post-call escalation.
+        """
+        headers: dict[str, str] = {}
         raw = self._issued.pop(data.get("litellm_call_id") or "", None)
-        return {SESSION_HEADER: raw} if raw else None
+        if raw:
+            headers[SESSION_HEADER] = raw
+        if self.config.route_header:
+            stamp = _route_stamp(data)
+            if stamp is not None:
+                headers[ROUTE_HEADER] = f"{stamp['route']}; risk={stamp['risk_level']}"
+        return headers or None
 
     async def async_pre_call_hook(
         self,
@@ -564,6 +587,7 @@ class RouterHook(CustomLogger):
         route = self._routing.resolve(risk_level, data_class)
         policy_action = route.legacy_action
         output_action = _output_action(route, assessed_level, generated_calls, egress_sinks)
+        _stamp_route(data, risk_level, route)  # the route header reports the final route
 
         if self.config.mode == "session":
             store = get_store()

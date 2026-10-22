@@ -63,6 +63,7 @@ def test_turn_result_defaults():
     assert tr.action == "unknown"
     assert tr.risk_score == 0.0
     assert tr.proxy_ok is True
+    assert (tr.risk_level, tr.route) == ("", "")
 
 
 def test_opening_messages_keeps_leading_user_turns_only():
@@ -125,10 +126,38 @@ from eval.metrics import build_counters, classify_row, compute_metrics, wilson_c
         ({"scenario_label": "benign", "is_attack_turn": "False", "action": "allow"}, "TN"),
         ({"scenario_label": "benign", "is_attack_turn": "False", "action": "strip-tools"}, "FP"),
         ({"scenario_label": "attack", "is_attack_turn": "False", "action": "block"}, "SKIP"),
+        ({"scenario_label": "attack", "is_attack_turn": "True", "action": "unknown"}, "FN"),
     ],
 )
 def test_classify_row(row, expected):
     assert classify_row(row) == expected
+
+
+@pytest.mark.parametrize(
+    "risk_level, action, expected",
+    [
+        ("elevated", "route-hardened", "TP"),
+        ("high", "strip-tools", "TP"),
+        ("low", "allow", "FN"),
+        ("", "block", "TP"),  # a record without a level (session violation) blocks
+        ("", "unknown", "FN"),  # no decision from the proxy
+    ],
+)
+def test_classify_row_uses_risk_level(risk_level, action, expected):
+    row = {
+        "scenario_label": "attack",
+        "is_attack_turn": "True",
+        "action": action,
+        "risk_level": risk_level,
+    }
+    assert classify_row(row) == expected
+
+
+def test_risk_level_decides_over_the_action_name():
+    """Detection follows the risk level, so renaming actions cannot change metrics."""
+    row = {"scenario_label": "benign", "is_attack_turn": "False", "action": "renamed"}
+    assert classify_row({**row, "risk_level": "low"}) == "TN"
+    assert classify_row({**row, "risk_level": "elevated"}) == "FP"
 
 
 def test_wilson_ci_zero():

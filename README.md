@@ -397,8 +397,9 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `ROUTER_MODE` | `session` | `stateless`, `session` |
 | `ROUTER_LEVEL` | `L3` | `L0`, `L1`, `L2`, `L3` |
 | `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
-| `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false`, `classifier_backend=none`, or a policy without a routing table) at startup |
+| `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false`, `classifier_backend=none`, `route_header=true`, or a policy without a routing table) at startup |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path; harness overlay sets `/logs/decisions.jsonl` |
+| `ROUTER_ROUTE_HEADER` | `false` | `true` returns `x-securelitellm-route: <route>; risk=<level>` on each response. Demo and debugging only: it tells a caller whether their content was flagged. The demo stack enables it |
 | `ROUTER_LITELLM_CONFIG` | unset (compose and the Docker image set `/app/config.yaml`) | path to the LiteLLM config; every model group the policy routing table names must exist in its `model_list`, or the proxy refuses to start |
 | `CLASSIFIER_BACKEND` | `none` | `none`, `local`, `mock`, `promptguard`, `llmguard` |
 | `LOCAL_CLASSIFIER_URL` | `http://local-classifier:8080` | URL of the local classifier sidecar |
@@ -447,6 +448,29 @@ Streaming requests that include tools are blocked before the model call because
 the current LiteLLM callback cannot reliably inspect streamed tool calls before
 they reach the client. Read-only tools are not treated as egress sinks; unknown
 tools are treated as potentially dangerous.
+
+### Route controls
+
+Each route in `deploy/policy.yaml` can enforce, besides its model group:
+
+| Control | Effect |
+|---|---|
+| `tools: none` | tool definitions are removed before the model call |
+| `prompt: <name>` | the named entry from the `prompts:` section is sent as a system message ahead of the conversation |
+| `hold: sinks` | every generated send, write, unknown, or malformed tool call is held, whatever the post-call score |
+| `hold: all` | every generated tool call is held, read-only ones included |
+
+The bundled policy gives `hardened` a safety prompt and `hold: sinks`, and
+`quarantine` a stricter prompt, `hold: all`, and no tools. The prompt steers the
+model; the hold and tool controls are what enforce. At load time the proxy checks
+that every named prompt exists and that a higher risk level keeps every control of
+the level below.
+
+Post-call routes on the higher of the pre-call and post-call risk levels, so a
+request is never relaxed after the model call; if the pre-call level is missing,
+post-call assumes `elevated`. Decision records carry `risk_level`, `route`, and on
+post-call `assessed_risk_level` and `pre_call_risk_level`. The eval counts a turn as
+detected when its risk level is above `low`.
 
 For AWS deployment, including HTTPS, OIDC, required secrets, and the explicit
 deployment enable switch, see [`infra/README.md`](infra/README.md).
