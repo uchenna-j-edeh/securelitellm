@@ -26,7 +26,9 @@ cd securelitellm
 make demo-setup
 make demo-check
 
-# Terminal 1: session/stateless proxies, classifier, and mock fallback in Docker
+# Terminal 1: session/stateless proxies, classifier, mock fallback, and a local
+# Ollama model for the quarantine route, in Docker. The first start downloads
+# the classifier (~180 MB) and the local model (~1 GB).
 make demo-dual-up
 
 # Terminal 2
@@ -401,6 +403,34 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `CLASSIFIER_BACKEND` | `none` | `none`, `local`, `mock`, `promptguard`, `llmguard` |
 | `LOCAL_CLASSIFIER_URL` | `http://local-classifier:8080` | URL of the local classifier sidecar |
 | `CLASSIFIER_MODEL` | `protectai/deberta-v3-base-prompt-injection-v2` | any HuggingFace text-classification model |
+
+### Routing tiers
+
+`deploy/policy.yaml` maps each risk level to a route: a LiteLLM model group plus
+the controls the hook enforces. The bundled table:
+
+| Risk level | Route | Model group | Controls |
+|---|---|---|---|
+| low | standard | the model the client requested | none |
+| elevated | hardened | `hardened` | generated sink calls held |
+| high | quarantine | `quarantine` | tool definitions removed |
+| critical | block | none | request rejected |
+
+Each LiteLLM config defines the `hardened` and `quarantine` groups:
+
+| Config | Used by | `hardened` | `quarantine` |
+|---|---|---|---|
+| `litellm_config.yaml` | default stack, eval, CI | mock | mock |
+| `litellm_config.local.yaml` | local dev without Docker | mock | mock |
+| `litellm_config.demo.yaml` | `make demo-dual-up` | mock | local Ollama `qwen2.5:1.5b` |
+| `litellm_config_prod.yaml` | production image | Groq | Groq (until a self-hosted model exists) |
+
+In the demo, quarantined requests are answered by the local model, so their context
+(often a prompt injection plus the data it targets) never leaves the machine. Ollama is
+reachable only on the Docker network, and its model is kept in the `ollama_models`
+volume. To use a different local model, change both the `ollama-pull` entrypoint in
+`deploy/docker-compose.demo-dual.yml` and the `quarantine` entry in
+`deploy/litellm_config.demo.yaml`; a test checks that they match.
 
 ### Tool-call decisions
 

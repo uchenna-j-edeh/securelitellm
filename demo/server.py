@@ -60,7 +60,7 @@ async def index() -> HTMLResponse:
 
 @app.get("/config")
 async def demo_config() -> dict:
-    if MODEL == "llama":
+    if MODEL == "gpt":
         model_display = "Groq · openai/gpt-oss-120b"
     elif MODEL == "groq":
         model_display = "Groq · qwen/qwen3.8-27b"

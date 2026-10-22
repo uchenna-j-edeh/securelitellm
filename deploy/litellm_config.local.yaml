@@ -14,6 +14,14 @@ model_list:
     model_info:
       supports_function_calling: true
 
+  # Routing tier (#183): high-risk requests, tools removed. Mock for local dev;
+  # the demo stack serves it from a local Ollama model.
+  - model_name: quarantine
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://127.0.0.1:8001/v1
+      api_key: "sk-fake"
+
 litellm_settings:
   drop_params: true
   callbacks: ["router.hook.proxy_handler_instance"]

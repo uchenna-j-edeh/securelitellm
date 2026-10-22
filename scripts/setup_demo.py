@@ -103,7 +103,7 @@ def render_config(
         "ROUTER_MODE": "session",
         "ROUTER_LEVEL": "L3",
         "ROUTER_ENFORCE": "true",
-        "DEMO_MODEL": "llama",
+        "DEMO_MODEL": "gpt",
         "DEMO_TOOL_SERVER_URL": "http://localhost:8002",
         "DEMO_EMAIL_MODE": email_mode,
         "DEMO_RECIPIENT": recipient,

@@ -16,6 +16,15 @@ model_list:
     model_info:
       supports_function_calling: true
 
+  # Routing tier (#183): high-risk requests are sent to this group with tools
+  # removed. Mock here so the eval and CI stay deterministic; the demo stack
+  # serves it from a local model (litellm_config.demo.yaml).
+  - model_name: quarantine
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://mock-model:8001/v1
+      api_key: "sk-fake"
+
   # Groq free tier (confirmed working model for this key):
   - model_name: groq
     litellm_params:
@@ -23,7 +32,7 @@ model_list:
       api_key: os.environ/GROQ_API_KEY
 
   # OSS 120B — large open-source model, less restricted than Qwen
-  - model_name: llama
+  - model_name: gpt
     litellm_params:
       model: groq/openai/gpt-oss-120b
       api_key: os.environ/GROQ_API_KEY

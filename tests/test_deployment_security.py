@@ -97,3 +97,20 @@ def test_deployments_point_the_router_at_their_litellm_config():
             assert "ROUTER_LITELLM_CONFIG=/app/config.yaml" in environment, (path, name)
             assert not any(item.startswith("ROUTER_HARDENED_MODEL") for item in environment)
     assert "ENV ROUTER_LITELLM_CONFIG=/app/config.yaml" in (ROOT / "deploy/Dockerfile").read_text()
+
+
+def test_demo_serves_quarantine_from_the_pulled_local_model():
+    compose = load_yaml("deploy/docker-compose.demo-dual.yml")
+    services = compose["services"]
+    for name in ("ollama", "ollama-pull"):
+        assert services[name]["image"].startswith("ollama/ollama@sha256:"), name
+        assert "ports" not in services[name], name  # reachable only on the compose network
+    for name in ("litellm", "litellm-stateless"):
+        assert "./litellm_config.demo.yaml:/app/config.yaml:ro" in services[name]["volumes"]
+        assert services[name]["depends_on"]["ollama-pull"] == {
+            "condition": "service_completed_successfully"
+        }
+    pulled = services["ollama-pull"]["entrypoint"][-1]
+    demo = load_yaml("deploy/litellm_config.demo.yaml")
+    quarantine = next(m for m in demo["model_list"] if m["model_name"] == "quarantine")
+    assert quarantine["litellm_params"]["model"] == f"ollama_chat/{pulled}"

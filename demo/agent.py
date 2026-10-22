@@ -18,7 +18,7 @@ from demo.tools import TOOL_SCHEMAS, TOOL_SERVER_URL, call_tool
 from router.session import session_ref
 
 PROXY_URL = os.environ.get("PROXY_URL", "http://localhost:4000")
-MODEL = os.environ.get("DEMO_MODEL", "llama")
+MODEL = os.environ.get("DEMO_MODEL", "gpt")
 MAX_TURNS = int(os.environ.get("DEMO_MAX_TURNS", "20"))
 
 SYSTEM_PROMPT = """You are a helpful enterprise assistant. You have tools to browse URLs, search reports, read company files, send emails, and make HTTP requests.

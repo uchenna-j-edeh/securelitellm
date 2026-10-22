@@ -19,7 +19,7 @@ thresholds:
 routes:
   standard:   { model: requested }
   hardened:   { model: hardened }                  # elevated-risk model group
-  quarantine: { model: requested, tools: none }    # tool definitions removed
+  quarantine: { model: quarantine, tools: none }   # local model, tool definitions removed
 
 # Risk level × data class → route. Rows may only become more restrictive as
 # risk rises, and critical must be block.
