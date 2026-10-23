@@ -99,6 +99,12 @@ CSV_FIELDS = [
     "proxy_ok",
     "risk_level",
     "route",
+    # Post-call (#177): scripted turns only
+    "scripted_tool_calls",
+    "post_action",
+    "post_risk_level",
+    "post_route",
+    "outcome",
     "data_class",
     # Derived classification columns (filled by metrics.py)
 ]
@@ -181,6 +187,11 @@ def _row(mode: str, level: str, history_mode: str, tr: TurnResult) -> dict:
         "proxy_ok": tr.proxy_ok,
         "risk_level": tr.risk_level,
         "route": tr.route,
+        "scripted_tool_calls": "|".join(tr.scripted_tool_calls),
+        "post_action": tr.post_action,
+        "post_risk_level": tr.post_risk_level,
+        "post_route": tr.post_route,
+        "outcome": tr.outcome,
         "data_class": tr.data_class,
     }
 
@@ -228,7 +239,10 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
                             for tr in results:
                                 writer.writerow(_row(mode, level, history_mode, tr))
                             fh.flush()
-                            actions = [tr.action for tr in results]
+                            actions = [
+                                f"{tr.action}->{tr.outcome}" if tr.outcome else tr.action
+                                for tr in results
+                            ]
                             print(f"{label} -> {actions}")
                         except Exception as exc:
                             print(f"{label} ERROR: {exc}", file=sys.stderr)

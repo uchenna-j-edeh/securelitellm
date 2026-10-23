@@ -19,10 +19,14 @@ def wait_for_decision(
     after_byte: int,
     timeout: float = 10.0,
     poll_interval: float = 0.05,
+    phase: str | None = None,
+    request_id: str | None = None,
 ) -> dict | None:
     """Poll the log file for a new decision record matching session_id.
 
     Returns the first record found after *after_byte* offset, or None on timeout.
+    *phase* and *request_id*, when given, must also match (e.g. the post-call
+    record of the request whose pre-call record was already read).
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -36,8 +40,13 @@ def wait_for_decision(
                     record = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if record.get("session_id") == session_id:
-                    return record
+                if record.get("session_id") != session_id:
+                    continue
+                if phase is not None and record.get("phase") != phase:
+                    continue
+                if request_id is not None and record.get("request_id") != request_id:
+                    continue
+                return record
         time.sleep(poll_interval)
     return None
 

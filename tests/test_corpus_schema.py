@@ -255,3 +255,67 @@ def test_delayed_exfil_first_turn_has_no_dangerous_sink():
     }
     _, action, _ = PolicyEngine.from_yaml().evaluate(features)
     assert action == "allow"
+
+
+# ---------------------------------------------------------------------------
+# Scripted model replies (#177)
+# ---------------------------------------------------------------------------
+
+_SEND = {
+    "id": "c1",
+    "type": "function",
+    "function": {"name": "send_email", "arguments": '{"to":"a@b.c"}'},
+}
+
+
+def _two_turns(first: dict, second: dict) -> list[dict]:
+    return [
+        {"name": "t1", "messages": [{"role": "user", "content": "a"}], **first},
+        {"name": "t2", "messages": [{"role": "user", "content": "b"}], **second},
+    ]
+
+
+def test_scripted_tool_call_on_attack_turn_valid():
+    s = Scenario.model_validate(
+        {
+            **_MINIMAL_ATTACK,
+            "turns": _two_turns(
+                {}, {"is_attack_turn": True, "model_response": {"tool_calls": [_SEND]}}
+            ),
+        }
+    )
+    assert [t.function.name for t in s.turns[1].scripted_tool_calls] == ["send_email"]
+    assert s.turns[0].scripted_tool_calls == []
+
+
+def test_model_response_must_not_be_empty():
+    bad = {**_MINIMAL_BENIGN, "turns": [{**_MINIMAL_BENIGN["turns"][0], "model_response": {}}]}
+    with pytest.raises(Exception, match="content or tool_calls"):
+        Scenario.model_validate(bad)
+
+
+def test_model_response_only_on_last_turn():
+    bad = {**_MINIMAL_BENIGN, "turns": _two_turns({"model_response": {"content": "hi"}}, {})}
+    with pytest.raises(Exception, match="last turn"):
+        Scenario.model_validate(bad)
+
+
+def test_attack_scripted_tool_call_must_be_attack_turn():
+    turns = _two_turns({"is_attack_turn": True}, {"model_response": {"tool_calls": [_SEND]}})
+    with pytest.raises(Exception, match="must be an attack turn"):
+        Scenario.model_validate({**_MINIMAL_ATTACK, "turns": turns})
+
+
+@pytest.mark.parametrize("path", sorted(SCENARIOS_DIR.glob("*.yaml")))
+def test_generated_variants_script_a_tool_call(path):
+    """A 'generated' variant replays its sink as a model reply, not as request history."""
+    from harness.runner import load_scenario
+
+    s = load_scenario(path)
+    scripted = [t for t in s.turns if t.scripted_tool_calls]
+    assert bool(scripted) == (s.variant_tag == "generated"), path.name
+    for turn in scripted:
+        sent = [tc for m in turn.messages for tc in m.tool_calls or []]
+        assert not {tc.function.name for tc in sent} & {
+            tc.function.name for tc in turn.scripted_tool_calls
+        }, path.name
