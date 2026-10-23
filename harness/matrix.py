@@ -105,6 +105,7 @@ CSV_FIELDS = [
     "post_risk_level",
     "post_route",
     "outcome",
+    "data_class",
     # Derived classification columns (filled by metrics.py)
 ]
 
@@ -191,6 +192,7 @@ def _row(mode: str, level: str, history_mode: str, tr: TurnResult) -> dict:
         "post_risk_level": tr.post_risk_level,
         "post_route": tr.post_route,
         "outcome": tr.outcome,
+        "data_class": tr.data_class,
     }
 
 

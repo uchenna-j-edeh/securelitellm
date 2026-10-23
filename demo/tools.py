@@ -48,7 +48,7 @@ TOOL_SCHEMAS = [
             "name": "read_file",
             "description": (
                 "Read a company workspace file. Available files include "
-                "annual_report.txt and quarterly_report.txt."
+                "annual_report.txt, quarterly_report.txt and employee_record.txt."
             ),
             "parameters": {
                 "type": "object",

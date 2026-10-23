@@ -10,6 +10,10 @@ M4 — policy engine wired; routing actions allow/route-hardened/strip-tools/blo
      Route controls: model group, tool removal, safety prompt, and holds on
      generated tool calls. Post-call routes on the higher of the pre-call and
      post-call risk levels, so a request is never relaxed after the model call.
+#181 — data classification: a regex detector scans user messages and tool
+     results; data_classes rules make the request public or sensitive, and
+     sensitive requests take the sensitive column of the routing table (a model
+     group cleared for sensitive data). In session mode the class is sticky.
 M5 — generated non-streaming tool calls are re-evaluated before release and
      mapped to execute/hold/block; streaming tool requests fail closed.
 
@@ -37,13 +41,16 @@ from router.config import RouterConfig
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
 from router.policy import (
+    DATA_CLASSES,
     RISK_LEVELS,
+    DataClass,
     PolicyEngine,
     PolicyViolation,
     RiskLevel,
     load_policy_document,
 )
 from router.routing import Route, RoutingTable, verify_model_groups
+from router.sensitive import scan_messages
 from router.session import (
     SessionError,
     SessionExpired,
@@ -67,6 +74,7 @@ ROUTE_HEADER = "x-securelitellm-route"  # "<route>; risk=<level>", when ROUTER_R
 # so a client cannot pre-set it.
 ROUTE_METADATA_KEY = "securelitellm_route"
 _MISSING_PRE_CALL_LEVEL: RiskLevel = "elevated"  # fail closed if pre-call left no level
+_MISSING_PRE_CALL_CLASS: DataClass = "sensitive"  # fail closed if pre-call left no class
 _SESSION_START_ROLES = frozenset({"system", "developer", "user"})
 _ISSUED_CACHE_MAX = 10_000  # request_id -> raw id, until the response headers are sent
 
@@ -115,8 +123,8 @@ def _max_level(*levels: RiskLevel) -> RiskLevel:
     return max(levels, key=RISK_LEVELS.index)
 
 
-def _stamp_route(data: dict, risk_level: RiskLevel, route: Route) -> None:
-    """Record the risk level and route in the request metadata (mutated in place).
+def _stamp_route(data: dict, risk_level: RiskLevel, data_class: DataClass, route: Route) -> None:
+    """Record the risk level, data class and route in the request metadata (mutated in place).
 
     Pre-call writes it for post-call; post-call overwrites it with the final
     route for the route header.
@@ -124,7 +132,11 @@ def _stamp_route(data: dict, risk_level: RiskLevel, route: Route) -> None:
     metadata = data.get("metadata")
     if not isinstance(metadata, dict):
         metadata = data["metadata"] = {}
-    metadata[ROUTE_METADATA_KEY] = {"risk_level": risk_level, "route": route.name}
+    metadata[ROUTE_METADATA_KEY] = {
+        "risk_level": risk_level,
+        "data_class": data_class,
+        "route": route.name,
+    }
 
 
 def _route_stamp(data: dict) -> dict[str, str] | None:
@@ -138,6 +150,12 @@ def _route_stamp(data: dict) -> dict[str, str] | None:
 def _pre_call_level(data: dict) -> RiskLevel | None:
     stamp = _route_stamp(data)
     return None if stamp is None else stamp["risk_level"]
+
+
+def _pre_call_class(data: dict) -> DataClass | None:
+    stamp = _route_stamp(data)
+    data_class = None if stamp is None else stamp.get("data_class")
+    return data_class if data_class in DATA_CLASSES else None
 
 
 def _with_prompt(messages: list[dict], prompt: str) -> list[dict]:
@@ -299,6 +317,27 @@ class RouterHook(CustomLogger):
                 llm_provider="",
             ) from exc
 
+    def _classify_data(
+        self, session_id: str, messages: list[dict], features: dict[str, Any]
+    ) -> tuple[DataClass, list[str]]:
+        """The request's data class and matching data-class rules (#181).
+
+        Logs which detectors matched, never the matched text. In session mode
+        the class is sticky: once sensitive data enters the session, every
+        later request is sensitive.
+        """
+        detected = scan_messages(messages)
+        features["sensitive_detectors"] = sorted(k for k, v in detected.items() if v)
+        data_class, rules = self._policy.classify(detected)
+        if self.config.mode == "session":
+            store = get_store()
+            if data_class == "sensitive":
+                store.mark_sensitive(session_id)
+            elif store.state(session_id).sensitive:
+                data_class = "sensitive"
+                features["session_sensitive"] = True
+        return data_class, rules
+
     def _check_live_model_group(self, route: Route, data: dict, request_id: str) -> None:
         """Reject the request if the route's model group is missing from the live router.
 
@@ -438,10 +477,12 @@ class RouterHook(CustomLogger):
 
         # M4: evaluate policy rules → risk score → risk level → route (#140)
         risk_score, risk_level, matched_rules = self._policy.assess(features)
-        data_class = "public"
+        data_class, data_class_rules = self._classify_data(session_id, messages, features)
         route = self._routing.resolve(risk_level, data_class)
-        action = route.legacy_action
-        _stamp_route(data, risk_level, route)
+        # action reports the risk response (the public column), so it stays
+        # comparable across data classes; route names the route actually taken.
+        action = self._routing.resolve(risk_level).legacy_action
+        _stamp_route(data, risk_level, data_class, route)
 
         # Escalation counter (session mode only, any policy hit)
         escalation_count = 0
@@ -465,6 +506,7 @@ class RouterHook(CustomLogger):
                 "risk_score": round(risk_score, 4),
                 "risk_level": risk_level,
                 "data_class": data_class,
+                "data_class_rules": data_class_rules,
                 "route": route.name,
                 "action": action,
                 "matched_rules": matched_rules,
@@ -534,7 +576,8 @@ class RouterHook(CustomLogger):
             return None
         egress_sinks = [c for c in generated_calls if c["category"] != "read" or "malformed" in c]
         pre_level = _pre_call_level(data)
-        pre_route = self._routing.resolve(pre_level or _MISSING_PRE_CALL_LEVEL)
+        data_class = _pre_call_class(data) or _MISSING_PRE_CALL_CLASS
+        pre_route = self._routing.resolve(pre_level or _MISSING_PRE_CALL_LEVEL, data_class)
         if not egress_sinks and pre_route.hold != "all":
             return None  # read-only calls are released unless the route holds everything
         session = self._resolve_session(data, request_id, user_api_key_dict, messages, "post_call")
@@ -583,11 +626,12 @@ class RouterHook(CustomLogger):
 
         risk_score, assessed_level, matched_rules = self._policy.assess(features)
         risk_level = _max_level(assessed_level, pre_level or _MISSING_PRE_CALL_LEVEL)
-        data_class = "public"
         route = self._routing.resolve(risk_level, data_class)
-        policy_action = route.legacy_action
+        policy_action = self._routing.resolve(risk_level).legacy_action
         output_action = _output_action(route, assessed_level, generated_calls, egress_sinks)
-        _stamp_route(data, risk_level, route)  # the route header reports the final route
+        _stamp_route(
+            data, risk_level, data_class, route
+        )  # the route header reports the final route
 
         if self.config.mode == "session":
             store = get_store()

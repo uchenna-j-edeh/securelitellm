@@ -42,16 +42,32 @@ variable "proxy_domain_name" {
   }
 }
 
+# The task runs litellm plus the Ollama sidecar for sensitive data (#181);
+# CPU inference of the sensitive model needs about 2 vCPU and 3 GiB.
 variable "task_cpu" {
-  description = "ECS task CPU units (256 | 512 | 1024 | 2048)"
+  description = "ECS task CPU units (Fargate: 1024 | 2048 | 4096 ...)"
   type        = number
-  default     = 512
+  default     = 2048
 }
 
 variable "task_memory" {
   description = "ECS task memory in MiB"
   type        = number
-  default     = 1024
+  default     = 4096
+}
+
+# --- Sensitive-data model (#181) ---
+
+variable "ollama_image" {
+  description = "Ollama sidecar image, pinned by digest"
+  type        = string
+  default     = "ollama/ollama@sha256:1bef639749741b375e9a1eb2c1346fb57ce52f5432de1f74846e44ccc18e1687" # 0.40.0
+}
+
+variable "sensitive_model" {
+  description = "Ollama model for the sensitive model group; must match litellm_config_prod.yaml"
+  type        = string
+  default     = "qwen2.5:1.5b"
 }
 
 # --- Router env vars (non-secret) ---

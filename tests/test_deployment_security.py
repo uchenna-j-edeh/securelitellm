@@ -124,3 +124,28 @@ def test_route_header_is_enabled_only_for_the_demo():
     demo = load_yaml("deploy/docker-compose.demo-dual.yml")["services"]
     for name in ("litellm", "litellm-stateless"):
         assert "ROUTER_ROUTE_HEADER=true" in demo[name]["environment"], name
+
+
+def _ollama_container(ecs: str) -> str:
+    start = ecs.index('name       = "ollama"')
+    return ecs[start : ecs.index('name      = "litellm"', start)]
+
+
+def test_production_serves_sensitive_data_from_a_local_sidecar():
+    """#181: the sensitive model group runs inside the ECS task, on its localhost only."""
+    ecs = (ROOT / "infra/ecs.tf").read_text()
+    variables = (ROOT / "infra/variables.tf").read_text()
+    sidecar = _ollama_container(ecs)
+    assert "portMappings" not in sidecar  # not exposed to the load balancer or the VPC
+    assert '{ name = "OLLAMA_HOST", value = "127.0.0.1:11434" }' in sidecar
+    assert "ollama pull ${var.sensitive_model} && wait" in sidecar  # failed pull stops the task
+    assert '{ containerName = "ollama", condition = "HEALTHY" }' in ecs
+    assert 'default     = "ollama/ollama@sha256:' in variables
+
+    model = variables.split('variable "sensitive_model"')[1].split('default     = "')[1]
+    model = model.split('"')[0]
+    prod = load_yaml("deploy/litellm_config_prod.yaml")["model_list"]
+    sensitive = next(m for m in prod if m["model_name"] == "sensitive")["litellm_params"]
+    assert sensitive == {"model": f"ollama_chat/{model}", "api_base": "http://localhost:11434"}
+    demo_pull = load_yaml("deploy/docker-compose.demo-dual.yml")["services"]["ollama-pull"]
+    assert demo_pull["entrypoint"][-1] == model  # demo and production run the same model

@@ -407,24 +407,24 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 
 ### Routing tiers
 
-`deploy/policy.yaml` maps each risk level to a route: a LiteLLM model group plus
-the controls the hook enforces. The bundled table:
+`deploy/policy.yaml` maps each risk level and data class to a route: a LiteLLM model
+group plus the controls the hook enforces. The bundled table:
 
-| Risk level | Route | Model group | Controls |
+| Risk level | Public data | Sensitive data | Controls |
 |---|---|---|---|
-| low | standard | the model the client requested | none |
-| elevated | hardened | `hardened` | generated sink calls held |
-| high | quarantine | `quarantine` | tool definitions removed |
-| critical | block | none | request rejected |
+| low | standard (the client's model) | sensitive (`sensitive`) | none |
+| elevated | hardened (`hardened`) | sensitive-guarded (`sensitive`) | generated sink calls held |
+| high | quarantine (`quarantine`) | sensitive-quarantine (`sensitive`) | tool definitions removed |
+| critical | block | block | request rejected |
 
-Each LiteLLM config defines the `hardened` and `quarantine` groups:
+Each LiteLLM config defines the `hardened`, `quarantine` and `sensitive` groups:
 
-| Config | Used by | `hardened` | `quarantine` |
-|---|---|---|---|
-| `litellm_config.yaml` | default stack, eval, CI | mock | mock |
-| `litellm_config.local.yaml` | local dev without Docker | mock | mock |
-| `litellm_config.demo.yaml` | `make demo-dual-up` | mock | local Ollama `qwen2.5:1.5b` |
-| `litellm_config_prod.yaml` | production image | Groq | Groq (until a self-hosted model exists) |
+| Config | Used by | `hardened` | `quarantine` | `sensitive` |
+|---|---|---|---|---|
+| `litellm_config.yaml` | default stack, eval, CI | mock | mock | mock |
+| `litellm_config.local.yaml` | local dev without Docker | mock | mock | mock |
+| `litellm_config.demo.yaml` | `make demo-dual-up` | mock | local Ollama `qwen2.5:1.5b` | local Ollama `qwen2.5:1.5b` |
+| `litellm_config_prod.yaml` | production image | Groq | Groq (until a self-hosted model exists) | Ollama sidecar in the ECS task |
 
 In the demo, quarantined requests are answered by the local model, so their context
 (often a prompt injection plus the data it targets) never leaves the machine. Ollama is
@@ -432,6 +432,50 @@ reachable only on the Docker network, and its model is kept in the `ollama_model
 volume. To use a different local model, change both the `ollama-pull` entrypoint in
 `deploy/docker-compose.demo-dual.yml` and the `quarantine` entry in
 `deploy/litellm_config.demo.yaml`; a test checks that they match.
+
+### Data classification
+
+Besides its risk level, every request gets a data class (#181): `public`, or
+`sensitive` when it carries secrets or personal data. Injection decides what the model
+may do; sensitive data decides who may see the request. A sensitive request goes to the
+`sensitive` model group with the same controls the public route at its risk level
+would apply, so tools are kept unless the risk level removes them.
+
+A regex detector (`router/sensitive.py`) scans user messages and tool results. The
+`data_classes` rules in `deploy/policy.yaml` decide which detectors classify:
+
+| Detector | Matches | Classifies as sensitive |
+|---|---|---|
+| `api_key_detected` | provider API keys and tokens by prefix (`sk-`, `gsk_`, `ghp_`, `AKIA`, …) | yes |
+| `private_key_detected` | PEM private-key blocks | yes |
+| `credential_url_detected` | URLs with an embedded password | yes |
+| `ssn_detected` | US Social Security numbers in valid ranges | yes |
+| `card_number_detected` | card numbers that pass the Luhn check | yes |
+| `email_detected`, `phone_detected` | email addresses, phone numbers | no: too common in agent traffic; logged only |
+
+- **Sticky in session mode:** once sensitive data enters a session, every later request
+  in it is sensitive. Stateless mode classifies each request on its own content.
+- **Post-call** routes on the class pre-call recorded; if it is missing, post-call
+  assumes `sensitive`.
+- **Decision records** carry `data_class`, the matching `data_class_rules`, and the
+  names of the detectors that matched (`features.sensitive_detectors`). The matched
+  text is never logged.
+- **`action`** reports the risk response, so it stays comparable across data classes;
+  `route` names the route taken. The eval scores detection on the risk level, so routing
+  a low-risk request to `sensitive` is not a detection or a false positive.
+
+**Startup checks** (the proxy refuses to start otherwise):
+
+- every cell of the `sensitive` column is a defined route or `block`, and it keeps every
+  control of the `public` column at the same risk level;
+- a sensitive route names a model group; it may not keep the client's requested model;
+- every deployment of that group declares `model_info.cleared_for: [sensitive]`. Set it
+  only on deployments allowed to see secrets and personal data, such as a self-hosted
+  model.
+
+In production the `sensitive` group is an Ollama sidecar in the same ECS task
+(`infra/ecs.tf`), reachable only on the task's localhost; see
+[`infra/README.md`](infra/README.md).
 
 ### Tool-call decisions
 
@@ -502,7 +546,7 @@ make classifier-up
 CLASSIFIER_BACKEND=local make eval
 ```
 
-`make eval` runs `harness/matrix.py --seeds 3` (756 runs) and then `eval/metrics.py --table --figures`. Expect it to take several hours. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
+`make eval` runs `harness/matrix.py --seeds 3` (828 runs) and then `eval/metrics.py --table --figures`. With the mock model it takes about 8 minutes. It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
 
 **Sanity-check the run.** In the progress log, every turn should resolve to `allow`, `route-hardened`, `strip-tools`, or `block`. If you see `['unknown', ...]`, the proxy is rejecting requests. Check `docker logs deploy-litellm-1` for `classifier is required but not configured`. A quick check against the finished CSV:
 

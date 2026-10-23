@@ -85,6 +85,7 @@ class TurnResult:
     action: str = "unknown"
     risk_level: str = ""  # low | elevated | high | critical ("" if the record has none)
     route: str = ""
+    data_class: str = ""  # public | sensitive ("" if the record has none, #181)
     risk_score: float = 0.0
     matched_rules: list[str] = field(default_factory=list)
     latency_ms: float = 0.0
@@ -278,6 +279,7 @@ def replay_scenario(
             tr.action = decision.get("action", "unknown")
             tr.risk_level = decision.get("risk_level", "")
             tr.route = decision.get("route", "")
+            tr.data_class = decision.get("data_class", "")
             tr.risk_score = float(decision.get("risk_score", 0.0))
             tr.matched_rules = decision.get("matched_rules", [])
             tr.latency_ms = float(decision.get("latency_ms", wall_ms))

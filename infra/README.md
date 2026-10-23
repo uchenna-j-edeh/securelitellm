@@ -28,6 +28,16 @@ Create an A/AAAA alias (Route 53) or appropriate DNS record for
 the raw ALB hostname as the client URL because it is not covered by your ACM
 certificate.
 
+The ECS task runs two containers. `litellm` is the proxy. `ollama` serves the
+`sensitive` model group (#181): requests that carry secrets or personal data are
+answered inside the task and never reach the hosted provider. Ollama listens on the
+task's localhost only and has no port mapping. At start it pulls `sensitive_model`
+(default `qwen2.5:1.5b`, about 1 GB). The proxy waits until the pull succeeds, and a
+failed pull stops the task. The default task size, 2 vCPU and 4 GiB, covers CPU
+inference of that model; a larger model needs `task_cpu` and `task_memory` raised.
+`sensitive_model` must match the `sensitive` entry in
+`deploy/litellm_config_prod.yaml`, which a test checks.
+
 Terraform creates secret placeholders but does not put credentials into them.
 Before starting ECS, set the real LiteLLM master key and provider API key in the
 two Secrets Manager entries shown by the Terraform resource names.
