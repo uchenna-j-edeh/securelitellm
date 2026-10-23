@@ -1,0 +1,8 @@
+Employee record — CONFIDENTIAL (synthetic demo data)
+=====================================================
+Name:        Jane Roe
+Department:  Finance
+Title:       Senior Analyst
+Start date:  2021-03-01
+SSN:         123-45-6789
+Manager:     Sam Lee

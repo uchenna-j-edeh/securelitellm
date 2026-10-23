@@ -28,6 +28,16 @@ model_list:
       model: ollama_chat/qwen2.5:1.5b
       api_base: http://ollama:11434
 
+  # Sensitive data (#181): a dedicated group on the local model, so secrets
+  # and personal data never leave the machine. Tools are kept.
+  - model_name: sensitive
+    litellm_params:
+      model: ollama_chat/qwen2.5:1.5b
+      api_base: http://ollama:11434
+    model_info:
+      supports_function_calling: true
+      cleared_for: [sensitive]
+
   # Groq free tier (confirmed working model for this key):
   - model_name: groq
     litellm_params:

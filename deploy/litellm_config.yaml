@@ -25,6 +25,19 @@ model_list:
       api_base: http://mock-model:8001/v1
       api_key: "sk-fake"
 
+  # Sensitive data (#181): requests carrying secrets or personal data. Mock
+  # here so the eval and CI stay deterministic; the demo and production serve
+  # it from a local Ollama model. Only deployments cleared for sensitive data
+  # may be used by the sensitive routes (checked at startup).
+  - model_name: sensitive
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://mock-model:8001/v1
+      api_key: "sk-fake"
+    model_info:
+      supports_function_calling: true
+      cleared_for: [sensitive]
+
   # Groq free tier (confirmed working model for this key):
   - model_name: groq
     litellm_params:

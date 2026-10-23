@@ -19,14 +19,27 @@ _TABLE = {
         "standard": {"model": "requested"},
         "hardened": {"model": "hardened"},
         "quarantine": {"model": "quarantine", "tools": "none"},
+        "sensitive": {"model": "sensitive"},
+        "sensitive-guarded": {"model": "sensitive"},
+        "sensitive-quarantine": {"model": "sensitive", "tools": "none"},
     },
     "matrix": {
-        "low": {"public": "standard"},
-        "elevated": {"public": "hardened"},
-        "high": {"public": "quarantine"},
+        "low": {"public": "standard", "sensitive": "sensitive"},
+        "elevated": {"public": "hardened", "sensitive": "sensitive-guarded"},
+        "high": {"public": "quarantine", "sensitive": "sensitive-quarantine"},
         "critical": "block",
     },
 }
+
+
+def _public_only(low: str, elevated: str, high: str) -> dict:
+    """A matrix whose sensitive column blocks, so it needs no cleared model group."""
+    return {
+        "low": {"public": low, "sensitive": "block"},
+        "elevated": {"public": elevated, "sensitive": "block"},
+        "high": {"public": high, "sensitive": "block"},
+        "critical": "block",
+    }
 
 
 def _table(**overrides) -> RoutingTable:
@@ -89,7 +102,10 @@ def test_policy_table_resolves_each_level():
 def test_summary_is_json_safe():
     summary = _table().summary()
     json.dumps(summary)
-    assert summary["matrix"]["high"] == {"public": "quarantine"}
+    assert summary["matrix"]["high"] == {
+        "public": "quarantine",
+        "sensitive": "sensitive-quarantine",
+    }
     assert summary["routes"]["standard"]["model"] == "requested"
 
 
@@ -166,11 +182,25 @@ def _write_litellm_config(tmp_path: Path, *groups: dict) -> Path:
     return path
 
 
-def _group(name: str, model: str = "openai/mock-gpt-4", tool_calling: bool | None = True):
-    entry = {"model_name": name, "litellm_params": {"model": model}}
+def _group(
+    name: str,
+    model: str = "openai/mock-gpt-4",
+    tool_calling: bool | None = True,
+    cleared: list[str] | None = None,
+):
+    entry: dict = {"model_name": name, "litellm_params": {"model": model}}
+    info: dict = {}
     if tool_calling is not None:
-        entry["model_info"] = {"supports_function_calling": tool_calling}
+        info["supports_function_calling"] = tool_calling
+    if cleared is not None:
+        info["cleared_for"] = cleared
+    if info:
+        entry["model_info"] = info
     return entry
+
+
+def _sensitive_group(**kwargs):
+    return _group("sensitive", cleared=["sensitive"], **kwargs)
 
 
 def _make_hook(monkeypatch, log_path, policy_path=None, litellm_config=None):
@@ -216,7 +246,7 @@ def test_startup_record_describes_routing(monkeypatch, log_path):
     assert startup["event"] == "startup"
     assert startup["routing"]["source"] == "policy"
     assert startup["routing"]["routes"]["hardened"]["model"] == "hardened"
-    assert startup["routing"]["matrix"]["critical"] == {"public": "block"}
+    assert startup["routing"]["matrix"]["critical"] == {"public": "block", "sensitive": "block"}
 
 
 def test_invalid_routing_table_prevents_startup(monkeypatch, log_path, tmp_path):
@@ -249,7 +279,7 @@ async def test_policy_table_controls_are_applied(monkeypatch, log_path, tmp_path
             "standard": {"model": "requested"},
             "locked": {"model": "safe-group", "tools": "none"},
         },
-        matrix={"low": "standard", "elevated": "locked", "high": "locked", "critical": "block"},
+        matrix=_public_only("standard", "locked", "locked"),
     )
     config = _write_litellm_config(tmp_path, _group("safe-group", tool_calling=False))
     hook = _make_hook(monkeypatch, log_path, policy_path=policy, litellm_config=config)
@@ -278,7 +308,7 @@ async def test_post_call_holds_sinks_on_any_policy_hit(monkeypatch, log_path, tm
     policy = _write_policy(
         tmp_path,
         routes={"standard": {"model": "requested"}},
-        matrix={"low": "standard", "elevated": "standard", "high": "standard", "critical": "block"},
+        matrix=_public_only("standard", "standard", "standard"),
     )
     hook = _make_hook(monkeypatch, log_path, policy_path=policy)
     _force_level(hook, monkeypatch, "elevated")
@@ -290,7 +320,10 @@ async def test_post_call_holds_sinks_on_any_policy_hit(monkeypatch, log_path, tm
         choices=[SimpleNamespace(message=message, finish_reason="tool_calls")]
     )
 
-    held = await hook.async_post_call_success_hook(MagicMock(), _data(), response)
+    data = _data()
+    await hook.async_pre_call_hook(MagicMock(), MagicMock(), data, "completion")
+
+    held = await hook.async_post_call_success_hook(MagicMock(), data, response)
 
     assert held.choices[0].message.tool_calls is None
     record = _records(log_path)[-1]
@@ -309,6 +342,14 @@ _CONTROLS = {
         "standard": {"model": "requested"},
         "hardened": {"model": "hardened", "prompt": "careful", "hold": "sinks"},
         "quarantine": {"model": "requested", "tools": "none", "prompt": "locked", "hold": "all"},
+        "sensitive": {"model": "sensitive"},
+        "sensitive-guarded": {"model": "sensitive", "prompt": "careful", "hold": "sinks"},
+        "sensitive-quarantine": {
+            "model": "sensitive",
+            "tools": "none",
+            "prompt": "locked",
+            "hold": "all",
+        },
     },
     "matrix": _TABLE["matrix"],
 }
@@ -329,7 +370,7 @@ def test_higher_level_may_not_drop_a_control(lower, higher):
             {
                 "prompts": _CONTROLS["prompts"],
                 "routes": {"standard": {"model": "requested"}, "a": lower, "b": higher},
-                "matrix": {"low": "standard", "elevated": "a", "high": "b", "critical": "block"},
+                "matrix": _public_only("standard", "a", "b"),
             }
         )
 
@@ -368,7 +409,7 @@ def test_bundled_policy_enforces_hardened_and_quarantine_controls():
 
 def _controls_hook(monkeypatch, log_path, tmp_path):
     policy = _write_policy(tmp_path, **_CONTROLS)
-    config = _write_litellm_config(tmp_path, _group("hardened"))
+    config = _write_litellm_config(tmp_path, _group("hardened"), _sensitive_group())
     return _make_hook(monkeypatch, log_path, policy_path=policy, litellm_config=config)
 
 
@@ -424,7 +465,11 @@ async def test_pre_call_level_overrides_a_client_supplied_value(monkeypatch, log
     data = _data()
     data["metadata"]["securelitellm_route"] = {"risk_level": "low", "route": "standard"}
     await hook.async_pre_call_hook(MagicMock(), MagicMock(), data, "completion")
-    assert data["metadata"]["securelitellm_route"] == {"risk_level": "high", "route": "quarantine"}
+    assert data["metadata"]["securelitellm_route"] == {
+        "risk_level": "high",
+        "data_class": "public",
+        "route": "quarantine",
+    }
 
 
 @pytest.mark.asyncio
@@ -501,6 +546,7 @@ async def test_low_route_executes_clean_sink(monkeypatch, log_path, tmp_path):
 
 @pytest.mark.asyncio
 async def test_missing_pre_call_level_fails_closed(monkeypatch, log_path, tmp_path):
+    """No pre-call stamp: post-call assumes elevated risk and sensitive data."""
     hook = _controls_hook(monkeypatch, log_path, tmp_path)
     _force_level(hook, monkeypatch, "low")
 
@@ -509,11 +555,8 @@ async def test_missing_pre_call_level_fails_closed(monkeypatch, log_path, tmp_pa
     assert held.choices[0].message.tool_calls is None
     record = _records(log_path)[-1]
     assert record["pre_call_risk_level"] is None
-    assert (record["risk_level"], record["route"], record["action"]) == (
-        "elevated",
-        "hardened",
-        "hold",
-    )
+    assert (record["risk_level"], record["data_class"]) == ("elevated", "sensitive")
+    assert (record["route"], record["action"]) == ("sensitive-guarded", "hold")
 
 
 # ---------------------------------------------------------------------------
@@ -616,12 +659,13 @@ def _model_list(config: str) -> dict[str, dict]:
     return {entry["model_name"]: entry["litellm_params"] for entry in raw["model_list"]}
 
 
-def test_demo_config_differs_from_the_eval_config_only_in_quarantine():
-    """The demo serves quarantine locally (#183); eval and CI keep the mock."""
+def test_demo_config_differs_from_the_eval_config_only_in_local_groups():
+    """The demo serves quarantine (#183) and sensitive (#181) locally; eval and CI keep the mock."""
     demo = _model_list("deploy/litellm_config.demo.yaml")
     base = _model_list("deploy/litellm_config.yaml")
-    assert demo.pop("quarantine")["model"].startswith("ollama_chat/")
-    assert base.pop("quarantine")["model"] == "openai/mock-gpt-4"
+    for group in ("quarantine", "sensitive"):
+        assert demo.pop(group)["model"].startswith("ollama_chat/"), group
+        assert base.pop(group)["model"] == "openai/mock-gpt-4", group
     assert demo == base
 
 
@@ -655,6 +699,7 @@ def test_tool_calling_inferred_from_litellm(tmp_path):
         tmp_path,
         _group("hardened", model="groq/qwen/qwen3.8-27b", tool_calling=None),
         _group("quarantine", tool_calling=False),  # strips tools: no tool calling needed
+        _sensitive_group(),
     )
     verify_model_groups(_table(), str(config))
 
@@ -667,7 +712,7 @@ def test_model_groups_need_a_litellm_config():
 def test_requested_only_table_needs_no_litellm_config():
     table = _table(
         routes={"standard": {"model": "requested"}},
-        matrix={"low": "standard", "elevated": "standard", "high": "standard", "critical": "block"},
+        matrix=_public_only("standard", "standard", "standard"),
     )
     verify_model_groups(table, "")
 

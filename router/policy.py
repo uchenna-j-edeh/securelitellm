@@ -20,6 +20,14 @@ route-hardened  Redirect to the `hardened` model group.
 strip-tools     Remove tool definitions from the request so the LLM cannot call tools.
 block           Reject the request entirely (raises PolicyViolation).
 
+Data classes (#181)
+-------------------
+public     no sensitive data detected.
+sensitive  the request carries secrets or personal data; routed to a model
+           group cleared for it. A data_classes rule names the class a
+           request gets when its `when` block matches (detector features from
+           router.sensitive); the highest matching class wins.
+
 Audit mode (ROUTER_ENFORCE=false)
 ----------------------------------
 Computes risk score and action but always passes through.  Lets you collect
@@ -33,10 +41,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from router.sensitive import DETECTORS
+
 Action = Literal["allow", "route-hardened", "strip-tools", "block"]
 RiskLevel = Literal["low", "elevated", "high", "critical"]
+DataClass = Literal["public", "sensitive"]
 
 RISK_LEVELS: tuple[RiskLevel, ...] = ("low", "elevated", "high", "critical")
+DATA_CLASSES: tuple[DataClass, ...] = ("public", "sensitive")  # ordered: least to most
 LEGACY_ACTIONS: dict[RiskLevel, Action] = {
     "low": "allow",
     "elevated": "route-hardened",
@@ -67,6 +79,7 @@ _ALLOWED_FEATURES = {
     "tainted_spans_in_sink_args",
     "untrusted_seen",
 }
+_DATA_CLASS_FEATURES = set(DETECTORS)
 
 
 class PolicyViolation(Exception):
@@ -99,8 +112,16 @@ class PolicyRule:
 
 
 @dataclass
+class DataClassRule:
+    id: str
+    when: dict[str, Any]  # detector feature → expected value (all ANDed)
+    data_class: DataClass
+
+
+@dataclass
 class PolicyConfig:
     rules: list[PolicyRule] = field(default_factory=list)
+    data_classes: list[DataClassRule] = field(default_factory=list)
     thresholds: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_THRESHOLDS))
 
     def __post_init__(self) -> None:
@@ -143,6 +164,8 @@ class PolicyEngine:
             seen_ids.add(rule_id)
             rules.append(PolicyRule(id=rule_id, when=conditions, score=score))
 
+        data_classes = _parse_data_classes(raw.get("data_classes", []), seen_ids)
+
         raw_thresholds = raw.get("thresholds", {})
         if not isinstance(raw_thresholds, dict):
             raise ValueError("Policy thresholds must be a mapping")
@@ -155,7 +178,7 @@ class PolicyEngine:
             raise ValueError("Policy thresholds must be numbers between 0 and 1")
         if values != sorted(values):
             raise ValueError("Policy thresholds must satisfy elevated <= high <= critical")
-        return cls(PolicyConfig(rules=rules, thresholds=thresholds))
+        return cls(PolicyConfig(rules=rules, data_classes=data_classes, thresholds=thresholds))
 
     def assess(self, features: dict[str, Any]) -> tuple[float, RiskLevel, list[str]]:
         """Return (risk_score, risk_level, matched_rule_ids)."""
@@ -166,6 +189,12 @@ class PolicyEngine:
 
         risk_score = max((r.score for r in matched), default=0.0)
         return risk_score, self._score_to_level(risk_score), [r.id for r in matched]
+
+    def classify(self, features: dict[str, Any]) -> tuple[DataClass, list[str]]:
+        """Return (data_class, matched data-class rule ids); public if none match."""
+        matched = [r for r in self._config.data_classes if self._matches(r.when, features)]
+        data_class = max((r.data_class for r in matched), key=DATA_CLASSES.index, default="public")
+        return data_class, [r.id for r in matched]
 
     def evaluate(self, features: dict[str, Any]) -> tuple[float, Action, list[str]]:
         """Return (risk_score, legacy action, matched_rule_ids)."""
@@ -190,6 +219,39 @@ class PolicyEngine:
         return "low"
 
 
+def max_data_class(*classes: DataClass) -> DataClass:
+    return max(classes, key=DATA_CLASSES.index)
+
+
+def _parse_data_classes(raw: Any, seen_ids: set[str]) -> list[DataClassRule]:
+    """Parse the data_classes rules; ids share a namespace with the risk rules."""
+    if not isinstance(raw, list):
+        raise ValueError("Policy 'data_classes' must be a list of rules")
+    rules = []
+    for raw_rule in raw:
+        if not isinstance(raw_rule, dict):
+            raise ValueError("Each data_classes rule must be a mapping")
+        rule_id = str(raw_rule.get("id", "")).strip()
+        conditions = raw_rule.get("when")
+        data_class = raw_rule.get("class")
+        if not rule_id or rule_id in seen_ids:
+            raise ValueError(f"Policy rule ids must be unique and non-empty: {rule_id!r}")
+        if not isinstance(conditions, dict) or not conditions:
+            raise ValueError(f"Data class rule {rule_id!r} must define a non-empty 'when' mapping")
+        unknown = set(conditions) - _DATA_CLASS_FEATURES
+        if unknown:
+            raise ValueError(
+                f"Data class rule {rule_id!r} uses unknown features: {sorted(unknown)}"
+            )
+        if data_class not in DATA_CLASSES or data_class == "public":
+            raise ValueError(
+                f"Data class rule {rule_id!r} class must be one of {list(DATA_CLASSES[1:])}"
+            )
+        seen_ids.add(rule_id)
+        rules.append(DataClassRule(id=rule_id, when=conditions, data_class=data_class))
+    return rules
+
+
 def load_policy_document(path: str | Path | None = None) -> dict[str, Any]:
     """Read the policy YAML once; PolicyEngine and RoutingTable both parse it."""
     import yaml  # only needed at load time
@@ -209,4 +271,4 @@ def load_policy_document(path: str | Path | None = None) -> dict[str, Any]:
     return raw
 
 
-_POLICY_SECTIONS = {"thresholds", "rules", "prompts", "routes", "matrix"}
+_POLICY_SECTIONS = {"thresholds", "rules", "data_classes", "prompts", "routes", "matrix"}

@@ -241,3 +241,14 @@ def test_scenario_loads_for_runner(path):
     sc = load_scenario(path)
     assert sc.id
     assert sc.turns
+
+
+def test_sensitive_route_is_not_a_detection():
+    """#181: a low-risk request routed to the sensitive model is not a false positive."""
+    row = {
+        **_make_row("session", "L0", "direct_exfil", "benign", False, "allow"),
+        "risk_level": "low",
+        "route": "sensitive",
+        "data_class": "sensitive",
+    }
+    assert classify_row(row) == "TN"

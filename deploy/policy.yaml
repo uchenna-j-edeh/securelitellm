@@ -7,6 +7,10 @@
 #   score >= elevated → elevated
 #   score <  elevated → low
 # The routing table below maps each risk level and data class to a route (#140).
+#
+# Data class (#181): public, or sensitive when a data_classes rule matches.
+# Sensitive requests go to a model group cleared for sensitive data
+# (model_info.cleared_for: [sensitive]), with the same controls as public.
 
 thresholds:
   elevated: 0.4
@@ -42,14 +46,41 @@ routes:
   standard:   { model: requested }
   hardened:   { model: hardened, prompt: hardened, hold: sinks }
   quarantine: { model: quarantine, tools: none, prompt: quarantine, hold: all }   # local model in the demo
+  # Sensitive data (#181): a dedicated local model in the demo and production.
+  sensitive:            { model: sensitive }
+  sensitive-guarded:    { model: sensitive, prompt: hardened, hold: sinks }
+  sensitive-quarantine: { model: sensitive, tools: none, prompt: quarantine, hold: all }
 
 # Risk level × data class → route. A higher risk level must keep every
-# control of the level below, and critical must be block.
+# control of the level below, the sensitive column must keep every control
+# of the public column, and critical must be block.
 matrix:
-  low:      { public: standard }
-  elevated: { public: hardened }
-  high:     { public: quarantine }
+  low:      { public: standard,   sensitive: sensitive }
+  elevated: { public: hardened,   sensitive: sensitive-guarded }
+  high:     { public: quarantine, sensitive: sensitive-quarantine }
   critical: block
+
+# Data classification (#181). A matching rule makes the request sensitive; in
+# session mode the session then stays sensitive. Only high-confidence
+# detectors classify: email addresses and phone numbers (email_detected,
+# phone_detected) are common in ordinary agent traffic, so they are recorded
+# in the decision log but do not change the class.
+data_classes:
+  - id: api_key
+    when: { api_key_detected: true }
+    class: sensitive
+  - id: private_key
+    when: { private_key_detected: true }
+    class: sensitive
+  - id: credential_url
+    when: { credential_url_detected: true }
+    class: sensitive
+  - id: ssn
+    when: { ssn_detected: true }
+    class: sensitive
+  - id: card_number
+    when: { card_number_detected: true }
+    class: sensitive
 
 rules:
   # Streaming tool calls cannot be synchronously inspected by the current

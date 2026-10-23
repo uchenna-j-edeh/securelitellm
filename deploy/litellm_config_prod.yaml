@@ -27,6 +27,17 @@ model_list:
       model: groq/qwen/qwen3.8-27b
       api_key: os.environ/GROQ_API_KEY
 
+  # Sensitive data (#181): requests carrying secrets or personal data never
+  # go to Groq. They are served by the Ollama sidecar in the same ECS task
+  # (infra/ecs.tf), reachable only on the task's localhost.
+  - model_name: sensitive
+    litellm_params:
+      model: ollama_chat/qwen2.5:1.5b
+      api_base: http://localhost:11434
+    model_info:
+      supports_function_calling: true
+      cleared_for: [sensitive]
+
 litellm_settings:
   drop_params: true
   callbacks: ["router.hook.proxy_handler_instance"]

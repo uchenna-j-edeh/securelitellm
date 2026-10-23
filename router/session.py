@@ -117,6 +117,7 @@ class SessionState:
     tainted: bool = False
     tainted_spans: list[str] = field(default_factory=list)  # SHA-256 of raw content
     escalation_count: int = 0  # times policy fired non-allow in this session
+    sensitive: bool = False  # sensitive data entered the context (#181); never cleared
 
 
 @dataclass
@@ -218,6 +219,13 @@ class SessionStore:
             s = self._store.get(key)
             if s is not None:
                 s.sinks.append(sink)
+
+    def mark_sensitive(self, key: str) -> None:
+        """Record that sensitive data entered the session; later requests stay sensitive."""
+        with self._lock:
+            s = self._store.get(key)
+            if s is not None:
+                s.sensitive = True
 
     def record_escalation(self, key: str) -> int:
         """Increment escalation counter and return new count."""

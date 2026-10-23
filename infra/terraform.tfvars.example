@@ -11,8 +11,8 @@ github_repo = "uchenna-j-edeh/securelitellm"
 acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/replace-me"
 proxy_domain_name   = "securelitellm.example.com"
 
-task_cpu    = 512
-task_memory = 1024
+task_cpu    = 2048 # litellm + Ollama sidecar for sensitive data (#181)
+task_memory = 4096
 
 # Secure defaults. Set router_enforce to "false" only for audit-only experiments.
 router_mode    = "session"

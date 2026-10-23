@@ -85,6 +85,38 @@ resource "aws_ecs_task_definition" "litellm" {
   task_role_arn            = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([
+    # Sensitive-data model (#181): requests carrying secrets or personal data
+    # are served here, inside the task, and never reach the hosted provider.
+    # Ollama listens on the task's localhost only (no port mapping, not behind
+    # the load balancer). It pulls the model at start; litellm waits for it,
+    # and a failed pull stops the task rather than starting without the model.
+    {
+      name       = "ollama"
+      image      = var.ollama_image
+      essential  = true
+      entryPoint = ["/bin/sh", "-c"]
+      command = [
+        "ollama serve & until ollama list >/dev/null 2>&1; do sleep 1; done; ollama pull ${var.sensitive_model} && wait"
+      ]
+      environment = [
+        { name = "OLLAMA_HOST", value = "127.0.0.1:11434" },
+      ]
+      healthCheck = {
+        command     = ["CMD-SHELL", "ollama show ${var.sensitive_model} >/dev/null 2>&1 || exit 1"]
+        interval    = 15
+        timeout     = 5
+        retries     = 5
+        startPeriod = 300
+      }
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.litellm.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ollama"
+        }
+      }
+    },
     {
       name      = "litellm"
       image     = "${aws_ecr_repository.app.repository_url}:latest"
@@ -92,6 +124,11 @@ resource "aws_ecs_task_definition" "litellm" {
 
       portMappings = [
         { containerPort = 4000, protocol = "tcp" }
+      ]
+
+      # The sensitive model group (litellm_config_prod.yaml) is the sidecar.
+      dependsOn = [
+        { containerName = "ollama", condition = "HEALTHY" }
       ]
 
       # Non-secret config — safe to store in plain env vars

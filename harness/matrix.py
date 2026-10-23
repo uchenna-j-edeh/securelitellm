@@ -99,6 +99,7 @@ CSV_FIELDS = [
     "proxy_ok",
     "risk_level",
     "route",
+    "data_class",
     # Derived classification columns (filled by metrics.py)
 ]
 
@@ -180,6 +181,7 @@ def _row(mode: str, level: str, history_mode: str, tr: TurnResult) -> dict:
         "proxy_ok": tr.proxy_ok,
         "risk_level": tr.risk_level,
         "route": tr.route,
+        "data_class": tr.data_class,
     }
 
 

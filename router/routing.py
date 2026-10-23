@@ -12,9 +12,9 @@ The policy file declares prompts, routes and a matrix:
       quarantine: { model: quarantine, tools: none, prompt: quarantine, hold: all }
 
     matrix:
-      low:      { public: standard }
-      elevated: { public: hardened }
-      high:     { public: quarantine }
+      low:      { public: standard,   sensitive: sensitive }
+      elevated: { public: hardened,   sensitive: sensitive-guarded }
+      high:     { public: quarantine, sensitive: sensitive-quarantine }
       critical: block
 
 Safety properties enforced at load time (a violation raises ValueError, so the
@@ -23,7 +23,9 @@ proxy refuses to start):
 - every (risk level, data class) cell is filled with a defined route or `block`;
 - every prompt a route names is defined;
 - a column never drops a control (prompt, hold, tool removal) as the risk level rises;
-- the `critical` row is `block` in every column (policy floor, #121).
+- the `critical` row is `block` in every column (policy floor, #121);
+- the `sensitive` column keeps every control of the `public` column at the
+  same risk level (#181): sensitive data changes the model, never relaxes it.
 
 Route controls (#140, PR C):
 
@@ -42,7 +44,10 @@ Every model group a route names must exist in the LiteLLM config
 (ROUTER_LITELLM_CONFIG), and routes that keep tools need deployments that
 support tool calling. verify_model_groups checks this at startup and raises
 RuntimeError, so a misconfigured tier stops the proxy instead of failing on
-the first escalated request (#85).
+the first escalated request (#85). Every model group used in the `sensitive`
+column must be cleared for sensitive data: each of its deployments declares
+`model_info.cleared_for: [sensitive]`, and the column may not keep the
+client's requested model (#181).
 """
 
 from __future__ import annotations
@@ -52,13 +57,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from router.policy import LEGACY_ACTIONS, RISK_LEVELS, Action, RiskLevel
-
-DataClass = Literal["public"]
-DATA_CLASSES: tuple[DataClass, ...] = ("public",)  # #181 adds internal/sensitive
+from router.policy import (
+    DATA_CLASSES,
+    LEGACY_ACTIONS,
+    RISK_LEVELS,
+    Action,
+    DataClass,
+    RiskLevel,
+)
 
 BLOCK = "block"
 REQUESTED = "requested"  # route model value: keep the client's requested model
+CLEARED_FOR_KEY = "cleared_for"  # model_info key listing the data classes a group may see
 LEGACY_HARDENED_GROUP = "hardened"
 
 _ROUTE_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
@@ -168,8 +178,11 @@ class RoutingTable:
     def from_mapping(cls, raw: dict[str, Any]) -> "RoutingTable":
         has_routes, has_matrix = "routes" in raw, "matrix" in raw
         if not has_routes and not has_matrix:
-            if "prompts" in raw:
-                raise ValueError("Policy 'prompts' are used by 'routes'; define routes and matrix")
+            for section in ("prompts", "data_classes"):
+                if section in raw:
+                    raise ValueError(
+                        f"Policy {section!r} need a routing table; define routes and matrix"
+                    )
             return cls.legacy()
         if has_routes != has_matrix:
             raise ValueError("Policy must define both 'routes' and 'matrix', or neither")
@@ -269,6 +282,14 @@ def _parse_matrix(raw: Any, routes: dict[str, Route]) -> dict[tuple[RiskLevel, D
 
 
 def _check_monotonic(matrix: dict[tuple[RiskLevel, DataClass], Route]) -> None:
+    for level in RISK_LEVELS:
+        public, sensitive = matrix[(level, "public")], matrix[(level, "sensitive")]
+        if not sensitive.covers(public):
+            raise ValueError(
+                f"Matrix cell {level}/sensitive ({sensitive.name}) is less restrictive than "
+                f"{level}/public ({public.name}): sensitive data may change the model, but "
+                "must keep every control (prompt, hold, tool removal)"
+            )
     for dc in DATA_CLASSES:
         if not matrix[("critical", dc)].blocks:
             raise ValueError(f"Matrix cell critical/{dc} must be 'block' (policy floor)")
@@ -288,6 +309,21 @@ def verify_model_groups(table: RoutingTable, litellm_config_path: str) -> None:
     Reads the LiteLLM config file because the hook is constructed before
     LiteLLM builds its router. Raises RuntimeError on any problem.
     """
+    sensitive = {
+        route.name: route
+        for (_, dc), route in table.matrix.items()
+        if dc == "sensitive" and not route.blocks
+    }
+    if table.source == "policy":
+        requested = sorted(name for name, route in sensitive.items() if route.model is None)
+        if requested:
+            raise RuntimeError(
+                f"Routes {requested} are in the sensitive column but keep the client's "
+                "requested model; sensitive routes must name a model group cleared for "
+                "sensitive data"
+            )
+    else:
+        sensitive = {}  # the legacy table classifies nothing as sensitive
     used = {route.name: route for route in table.matrix.values() if route.model is not None}
     if not used:
         return
@@ -304,9 +340,18 @@ def verify_model_groups(table: RoutingTable, litellm_config_path: str) -> None:
                 f"Route {route.name!r} uses model group {route.model!r}, which is not in "
                 f"the LiteLLM model_list ({litellm_config_path})"
             )
+        if route.name in sensitive:
+            uncleared = [model for model, _, cleared in group if "sensitive" not in cleared]
+            if uncleared:
+                raise RuntimeError(
+                    f"Route {route.name!r} is in the sensitive column, but model group "
+                    f"{route.model!r} has deployments not cleared for sensitive data: "
+                    f"{uncleared}. Set model_info.{CLEARED_FOR_KEY}: [sensitive] only on "
+                    "deployments allowed to see secrets and personal data."
+                )
         if route.strips_tools:
             continue
-        unsupported = [model for model, supported in group if not supported]
+        unsupported = [model for model, supported, _ in group if not supported]
         if unsupported:
             raise RuntimeError(
                 f"Route {route.name!r} keeps tools, but model group {route.model!r} has "
@@ -315,8 +360,8 @@ def verify_model_groups(table: RoutingTable, litellm_config_path: str) -> None:
             )
 
 
-def _load_model_list(path: Path) -> dict[str, list[tuple[str, bool]]]:
-    """model_name → [(litellm model, supports tool calling)] from a LiteLLM config."""
+def _load_model_list(path: Path) -> dict[str, list[tuple[str, bool, frozenset[str]]]]:
+    """model_name → [(litellm model, supports tool calling, cleared data classes)]."""
     import litellm
     import yaml
 
@@ -328,7 +373,7 @@ def _load_model_list(path: Path) -> dict[str, list[tuple[str, bool]]]:
     if not isinstance(entries, list):
         raise RuntimeError(f"LiteLLM config {path} has no model_list")
 
-    groups: dict[str, list[tuple[str, bool]]] = {}
+    groups: dict[str, list[tuple[str, bool, frozenset[str]]]] = {}
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("model_name"), str):
             raise RuntimeError(f"LiteLLM config {path} has a malformed model_list entry")
@@ -343,5 +388,15 @@ def _load_model_list(path: Path) -> dict[str, list[tuple[str, bool]]]:
                 supported = bool(model) and litellm.supports_function_calling(model)
             except Exception:
                 supported = False
-        groups.setdefault(entry["model_name"], []).append((model, supported))
+        cleared = info.get(CLEARED_FOR_KEY) if isinstance(info, dict) else None
+        if cleared is not None and not (
+            isinstance(cleared, list) and all(c in DATA_CLASSES for c in cleared)
+        ):
+            raise RuntimeError(
+                f"LiteLLM config {path}: model_info.{CLEARED_FOR_KEY} of "
+                f"{entry['model_name']!r} must be a list of data classes {list(DATA_CLASSES)}"
+            )
+        groups.setdefault(entry["model_name"], []).append(
+            (model, supported, frozenset(cleared or ()))
+        )
     return groups
