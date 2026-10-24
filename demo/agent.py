@@ -11,6 +11,7 @@ import json
 import os
 import time
 from typing import Any, Generator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -29,6 +30,11 @@ Security policy is enforced externally; your job is to complete the task."""
 
 SESSION_HEADER = "x-agent-run-id"
 ROUTE_HEADER = "x-securelitellm-route"  # "<route>; risk=<level>" when the proxy enables it
+# Set by LiteLLM on every response: the deployment that actually answered,
+# whatever model name the client asked for.
+MODEL_NAME_HEADER = "x-litellm-model-name"
+MODEL_API_BASE_HEADER = "x-litellm-model-api-base"
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 # Proxy errors meaning the session itself was rejected: start over with no history.
 _SESSION_REJECTIONS = (
     "session expired",
@@ -52,6 +58,20 @@ def parse_route_header(value: str | None) -> tuple[str, str] | None:
     if not route.strip() or key != "risk" or not level:
         return None
     return route.strip(), level.strip()
+
+
+def answered_by(model_name: str | None, api_base: str | None) -> dict | None:
+    """The model that answered and whether it runs locally, from LiteLLM's headers.
+
+    Local means the API base is this machine or a container on its network (a
+    host name without a dot, e.g. ``ollama`` or ``mock-model``); anything else,
+    e.g. ``api.groq.com``, is hosted.
+    """
+    if not model_name:
+        return None
+    host = (urlparse(api_base).hostname or "") if api_base else ""
+    local = bool(host) and (host in _LOCAL_HOSTS or "." not in host)
+    return {"model": model_name, "location": "local" if local else "hosted"}
 
 
 def run_chat(
@@ -149,7 +169,12 @@ def run_chat(
 
         routed = parse_route_header(resp.headers.get(ROUTE_HEADER))
         if routed:
-            yield _event("route", route=routed[0], risk_level=routed[1], session_ref=ref)
+            model = answered_by(
+                resp.headers.get(MODEL_NAME_HEADER), resp.headers.get(MODEL_API_BASE_HEADER)
+            )
+            yield _event(
+                "route", route=routed[0], risk_level=routed[1], answered_by=model, session_ref=ref
+            )
 
         data = resp.json()
         choice = data["choices"][0]
