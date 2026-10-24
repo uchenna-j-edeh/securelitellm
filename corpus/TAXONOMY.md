@@ -9,7 +9,7 @@ listed (see ADR-005: direct user injection, supply-chain, DoS out of scope).
 | Scenario class | OWASP Agentic | NSA MCP ref | Description | Scenario IDs |
 |---|---|---|---|---|
 | `direct_exfil` | A02, A03 | T1.3 | Injection in tool/MCP output drives immediate same-turn exfil | sc-001, sc-002, sc-003, sc-004, sc-030 |
-| `delayed_exfil` | A02, A03 | T1.3, T2.1 | Injection plants taint; exfil happens in a later turn after context scroll | sc-010, sc-011, sc-012, sc-013, sc-014, sc-031 |
+| `delayed_exfil` | A02, A03 | T1.3, T2.1 | Injection plants taint; exfil happens in a later turn after context scroll | sc-005, sc-010, sc-011, sc-012, sc-013, sc-014, sc-031 |
 | `mcp_pivot` | A02, A05 | T2.2 | MCP server output redirects agent to call an unauthorized egress tool | sc-020, sc-021 |
 | `rag_poison` | A02, A08 | T1.4 | Poisoned document in retrieval store drives exfil | sc-030, sc-031 |
 
@@ -32,11 +32,11 @@ listed (see ADR-005: direct user injection, supply-chain, DoS out of scope).
 
 | Ref | Threat | Covered by |
 |---|---|---|
-| T1.3 | Tool output injection → exfiltration | sc-001–003, sc-010–013 |
+| T1.3 | Tool output injection → exfiltration | sc-001–003, sc-005, sc-010–013 |
 | T1.4 | RAG / retrieval store poisoning | sc-030, sc-031 |
-| T2.1 | Cross-turn taint / context carry-over | sc-010–013, sc-021, sc-031 |
+| T2.1 | Cross-turn taint / context carry-over | sc-005, sc-010–013, sc-021, sc-031 |
 | T2.2 | MCP server pivot (tool redirect) | sc-020, sc-021 |
-| T3.1 | Credential / secret theft via tool | sc-010, sc-012 |
+| T3.1 | Credential / secret theft via tool | sc-005, sc-010, sc-012 |
 
 ## Real-incident grounding (issue #38)
 
@@ -67,3 +67,12 @@ generated call must be executed. These turns are scored by prevention rate and
 post-call FPR instead of DR and FPR. In sc-014, stateless-incremental mode is
 expected to execute the generated exfil call: the turn carries no source, so
 neither hook has anything to score.
+
+## JSON-encoded tool results (#189)
+
+Most agents send a tool's return value as `json.dumps(result)`. The classifier
+reads the decoded strings of such a result, not the raw JSON. bn-006 is a benign
+file read returned as `{"content": "..."}`, which the classifier misread as an
+injection before #189. sc-005 (`variant_tag: encoding`, from sc-010) puts the
+injected directive inside a JSON string, to check that decoding loses no
+detection.
