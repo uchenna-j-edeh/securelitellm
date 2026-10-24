@@ -133,6 +133,9 @@
     .rt-quarantine{background:#431407;color:#fdba74;border-color:#431407;}
     .rt-block{background:#450a0a;color:#fca5a5;border-color:#450a0a;}
     .rt-sensitive,.rt-sensitive-guarded,.rt-sensitive-quarantine{background:#1e1b4b;color:#c4b5fd;border-color:#1e1b4b;}
+    .loc{padding:1px 6px;border-radius:8px;font-size:.62rem;font-weight:700;}
+    .loc-local{background:#1e1b4b;color:#c4b5fd;}
+    .loc-hosted{background:#1f2937;color:#93c5fd;}
     .route-row{display:flex;justify-content:flex-end;gap:6px;align-items:center;
                font-size:.66rem;color:var(--muted);margin:-4px 0 2px;}
 
@@ -179,7 +182,7 @@
 <header>
   <h1>SecureLiteLLM</h1>
   <span class="pill pill-indigo" id="agent-pill">Tool-calling agent</span>
-  <span class="pill pill-indigo" id="model-pill">Model: loading…</span>
+  <span class="pill pill-indigo" id="model-pill" title="The model the agent asks for. The proxy may route a call elsewhere; each call shows the model that answered.">Requested model: loading…</span>
   <span class="pill pill-green" id="classifier-pill">DeBERTa classifier</span>
   <div class="spacer"></div>
   <div class="mode-switch" title="Which proxy the agent talks to. Switching starts a fresh session.">
@@ -203,6 +206,7 @@
       <button class="qt attack" onclick="fillInput('Continue.')">⚠ 4b · Trigger later</button>
       <button class="qt attack" onclick="fillUserDirectedEmail()">⚠ 4c · Email that</button>
       <button class="qt" onclick="fillInput('Read employee_record.txt and tell me which department Jane Roe works in.')">5 · Sensitive file</button>
+      <button class="qt" onclick="fillInput('My SSN is 123-45-6789. Which form fixes a wrong SSN on a W-2?')">5b · Typed PII</button>
     </div>
 
     <div class="messages" id="messages">
@@ -261,7 +265,7 @@
 
   fetch('/config').then(r => r.json()).then(cfg => {
     document.getElementById('agent-pill').textContent = cfg.agent;
-    document.getElementById('model-pill').textContent = 'Model: ' + cfg.model_display;
+    document.getElementById('model-pill').textContent = 'Requested model: ' + cfg.model_display;
     DEMO_RECIPIENT = cfg.demo_recipient || DEMO_RECIPIENT;
     document.getElementById('classifier-pill').title =
       `Tool service: ${cfg.tool_service} · Email mode: ${cfg.email_mode}`;
@@ -376,11 +380,17 @@
     return `<span class="rt ${cls}">${esc(route)}</span>`;
   }
 
-  function appendRoute(route, level) {
+  function appendRoute(route, level, answeredBy) {
     const m = getMessages();
     const div = document.createElement('div');
     div.className = 'route-row';
-    div.innerHTML = `model call routed: ${routeBadge(route)} <span>risk ${esc(level)}</span>`;
+    // answeredBy comes from LiteLLM's response headers: the deployment that
+    // actually answered, not the model the agent asked for.
+    const by = answeredBy
+      ? ` <span>· answered by <code>${esc(answeredBy.model)}</code></span>` +
+        ` <span class="loc loc-${esc(answeredBy.location)}">${esc(answeredBy.location)}</span>`
+      : '';
+    div.innerHTML = `model call routed: ${routeBadge(route)} <span>risk ${esc(level)}</span>${by}`;
     m.appendChild(div);
     scrollChat();
   }
@@ -620,7 +630,7 @@ untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink
         enrichBlockedBanner(ev.record);
         break;
       case 'route':
-        appendRoute(ev.route, ev.risk_level);
+        appendRoute(ev.route, ev.risk_level, ev.answered_by);
         break;
       case 'proxy_session': {
         const sid = document.getElementById('session-id-display');
