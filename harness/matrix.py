@@ -29,6 +29,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from corpus.validate import Scenario
 from harness.decisions import clear_log
 from harness.runner import TurnResult, load_scenario, replay_scenario
+from router.controls import CONTROLS_ENV, Controls, resolve_controls
+from router.policy import load_policy_document
 
 REPO_ROOT = Path(__file__).parent.parent
 COMPOSE_BASE = REPO_ROOT / "deploy" / "docker-compose.yml"
@@ -106,7 +108,18 @@ CSV_FIELDS = [
     "post_route",
     "outcome",
     "data_class",
+    # Protection switches in effect for the run (#196), e.g. classifier=on,allowlist=off
+    "controls",
     # Derived classification columns (filled by metrics.py)
+]
+
+# Every combination of the switches the harness sets (#196). Memory is the
+# mode loop below, so these four give all eight combinations. A combination
+# the router refuses (allowlist=on before #167) is skipped with a note.
+CONDITIONS: list[Controls] = [
+    Controls(classifier=classifier, allowlist=allowlist)
+    for classifier in (True, False)
+    for allowlist in (False, True)
 ]
 
 
@@ -120,8 +133,8 @@ def _compose_cmd(*args: str) -> list[str]:
     return [*cmd, *args]
 
 
-def start_proxy(mode: str, level: str) -> None:
-    """Restart the proxy stack with new ROUTER_MODE / ROUTER_LEVEL."""
+def start_proxy(mode: str, level: str, controls: str = "") -> None:
+    """Restart the proxy stack with new ROUTER_MODE / ROUTER_LEVEL / ROUTER_CONTROLS."""
     classifier_backend = os.environ.get("CLASSIFIER_BACKEND", "none")
     env = {
         **os.environ,
@@ -130,6 +143,7 @@ def start_proxy(mode: str, level: str) -> None:
         "ROUTER_ENFORCE": "true",
         "ROUTER_LOG_PATH": "/logs/decisions.jsonl",
         "CLASSIFIER_BACKEND": classifier_backend,
+        CONTROLS_ENV: controls,
     }
     if classifier_backend == "local":
         env["LOCAL_CLASSIFIER_URL"] = os.environ.get(
@@ -138,7 +152,11 @@ def start_proxy(mode: str, level: str) -> None:
     # Stop any running stack first
     subprocess.run(_compose_cmd("down", "--remove-orphans"), check=False, capture_output=True)
     subprocess.run(_compose_cmd("up", "-d", "--build"), env=env, check=True, capture_output=True)
-    print(f"  started proxy mode={mode} level={level} classifier={classifier_backend}", flush=True)
+    print(
+        f"  started proxy mode={mode} level={level} classifier={classifier_backend}"
+        f" controls={controls or 'policy'}",
+        flush=True,
+    )
 
 
 def wait_healthy(timeout: float = 120.0) -> None:
@@ -167,7 +185,7 @@ def load_corpus() -> list[Scenario]:
     return scenarios
 
 
-def _row(mode: str, level: str, history_mode: str, tr: TurnResult) -> dict:
+def _row(mode: str, level: str, history_mode: str, tr: TurnResult, controls: str = "") -> dict:
     return {
         "mode": mode,
         "level": level,
@@ -193,11 +211,43 @@ def _row(mode: str, level: str, history_mode: str, tr: TurnResult) -> dict:
         "post_route": tr.post_route,
         "outcome": tr.outcome,
         "data_class": tr.data_class,
+        "controls": controls,
     }
 
 
-def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
+def resolved_controls(controls: str) -> Controls:
+    """The switches the proxy will run with: the policy's, overridden by *controls*."""
+    return resolve_controls(load_policy_document(os.environ.get("POLICY_PATH") or None), controls)
+
+
+def conditions_csv(controls: Controls) -> Path:
+    """results_classifier-on_allowlist-off.csv for one combination of switches."""
+    slug = "_".join(f"{name}-{value}" for name, value in controls.summary().items())
+    return RESULTS_DIR / f"results_{slug}.csv"
+
+
+def run_conditions(n_seeds: int = 3, dry_run: bool = False) -> list[Path]:
+    """Run the matrix once per combination of switches; one results CSV each."""
+    written = []
+    for controls in CONDITIONS:
+        try:
+            resolved_controls(controls.label())
+        except ValueError as exc:
+            print(f"== {controls.label()}: skipped ({exc})\n", flush=True)
+            continue
+        print(f"== {controls.label()}", flush=True)
+        out = conditions_csv(controls)
+        run_matrix(n_seeds, dry_run, controls=controls.label(), out=out)
+        written.append(out)
+    return written
+
+
+def run_matrix(
+    n_seeds: int = 3, dry_run: bool = False, controls: str = "", out: Path | None = None
+) -> None:
+    out = out or RESULTS_CSV
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    controls_label = resolved_controls(controls).label()  # fails before any proxy starts
     corpus = load_corpus()
     classifier_backend = os.environ.get("CLASSIFIER_BACKEND", "none")
     # Local classifier may need to download the model on first run (~180 MB).
@@ -208,9 +258,10 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
         f"History modes per config: stateless={HISTORY_MODES['stateless']}, session={HISTORY_MODES['session']}"
     )
     print(f"Classifier backend: {classifier_backend}")
+    print(f"Controls: {controls_label}")
     print(f"Total runs: {len(corpus) * n_seeds * n_history_runs}\n")
 
-    with RESULTS_CSV.open("w", newline="") as fh:
+    with out.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
         writer.writeheader()
 
@@ -220,7 +271,7 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
 
             if not dry_run:
                 clear_log()  # clear BEFORE container starts so it opens from byte 0
-                start_proxy(mode, level)
+                start_proxy(mode, level, controls)
                 wait_healthy(health_timeout)
                 time.sleep(2)  # grace period — proxy is healthy but hook may still be loading
 
@@ -237,7 +288,7 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
                                 scenario, seed=seed, history_mode=history_mode
                             )
                             for tr in results:
-                                writer.writerow(_row(mode, level, history_mode, tr))
+                                writer.writerow(_row(mode, level, history_mode, tr, controls_label))
                             fh.flush()
                             actions = [
                                 f"{tr.action}->{tr.outcome}" if tr.outcome else tr.action
@@ -251,12 +302,25 @@ def run_matrix(n_seeds: int = 3, dry_run: bool = False) -> None:
                 stop_proxy()
                 print(f"[{mode}/{level}] done\n")
 
-    print(f"\nResults written to {RESULTS_CSV}")
+    print(f"\nResults written to {out}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, default=3, help="runs per scenario (default 3)")
     parser.add_argument("--dry-run", action="store_true", help="enumerate only, no proxy")
+    parser.add_argument(
+        "--controls",
+        default="",
+        help="override the policy's switches, e.g. classifier=off (#196)",
+    )
+    parser.add_argument(
+        "--conditions",
+        action="store_true",
+        help="run every combination of the switches, one results_<switches>.csv each",
+    )
     args = parser.parse_args()
-    run_matrix(n_seeds=args.seeds, dry_run=args.dry_run)
+    if args.conditions:
+        run_conditions(n_seeds=args.seeds, dry_run=args.dry_run)
+    else:
+        run_matrix(n_seeds=args.seeds, dry_run=args.dry_run, controls=args.controls)

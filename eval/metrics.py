@@ -316,6 +316,30 @@ def print_table(metrics: list[dict]) -> None:
     print()
 
 
+def print_summary(csv_paths: list[Path]) -> None:
+    """One table across combinations of switches (#196): one row per results CSV and mode."""
+    header = (
+        f"{'controls':<30} {'mode':<10} "
+        + " ".join(f"DR {lvl:<4}" for lvl in LEVELS)
+        + "  "
+        + " ".join(f"FPR {lvl:<3}" for lvl in LEVELS)
+        + "  PR L3   pFPR L3"
+    )
+    print("== Combinations of switches (ALL classes) ==")
+    print(header)
+    for path in csv_paths:
+        rows = load_rows(path)
+        labels = {row.get("controls") or "" for row in rows}
+        label = labels.pop() if len(labels) == 1 else f"{path.name} (mixed)"
+        metrics = compute_metrics(build_counters(rows))
+        index = {(m["mode"], m["level"]): m for m in metrics if m["class"] == "ALL"}
+        for mode in MODES:
+            cells = [_pct(index[(mode, lvl)]["DR"]) for lvl in LEVELS]
+            cells += [""] + [_pct(index[(mode, lvl)]["FPR"]) for lvl in LEVELS]
+            cells += ["", _pct(index[(mode, "L3")]["PR"]), _pct(index[(mode, "L3")]["post_FPR"])]
+            print(f"{label or 'policy':<30} {mode:<10} " + " ".join(f"{c:>7}" for c in cells))
+
+
 def write_json(metrics: list[dict], path: Path) -> None:
     path.write_text(json.dumps(metrics, indent=2))
     print(f"Metrics JSON written to {path}")
@@ -430,7 +454,17 @@ if __name__ == "__main__":
     parser.add_argument("--table", action="store_true", help="print paper table to stdout")
     parser.add_argument("--figures", action="store_true", help="write PNG figures")
     parser.add_argument("--json", action="store_true", help="write metrics.json")
+    parser.add_argument(
+        "--summary",
+        nargs="+",
+        metavar="CSV",
+        help="print one table across several results CSVs (e.g. from --conditions)",
+    )
     args = parser.parse_args()
+
+    if args.summary:
+        print_summary([Path(p) for p in args.summary])
+        raise SystemExit(0)
 
     csv_path = Path(args.csv)
     if not csv_path.exists():

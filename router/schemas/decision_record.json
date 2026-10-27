@@ -12,6 +12,16 @@
     "request_id": { "type": "string", "description": "litellm_call_id or generated UUID" },
     "mode":       { "type": "string", "enum": ["stateless", "session"] },
     "level":      { "type": "string", "enum": ["L0", "L1", "L2", "L3"] },
+    "controls":   {
+      "type": "object",
+      "description": "Protection switches in effect (#196).",
+      "additionalProperties": false,
+      "required": ["classifier", "allowlist"],
+      "properties": {
+        "classifier": { "enum": ["on", "off"] },
+        "allowlist":  { "enum": ["on", "off"] }
+      }
+    },
     "features":   {
       "type": "object",
       "description": "Feature set available at the active level (populated M2+)",
