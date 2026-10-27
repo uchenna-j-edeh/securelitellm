@@ -546,7 +546,16 @@ make classifier-up
 CLASSIFIER_BACKEND=local make eval
 ```
 
-`make eval` runs `harness/matrix.py --seeds 3` (828 runs) and then `eval/metrics.py --table --figures`. With the mock model it takes about 8 minutes. It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
+`make eval` runs `harness/matrix.py --seeds 3` (900 runs) and then `eval/metrics.py --table --figures`. With the mock model it takes about 8 minutes. It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
+
+**Combinations of protections (#196).** Each protection is a switch in the policy's `controls:` section, overridable with `ROUTER_CONTROLS`:
+
+| Switch | `on` | `off` |
+|---|---|---|
+| `classifier` (default on) | tool results are judged by the injection classifier, which is then required | provenance only: every untrusted tool result counts as untrusted, in both modes (the #192 idea) |
+| `allowlist` (default off) | every send destination must be allowlisted (#167, refused until it is built) | destinations are not checked |
+
+Session memory is the third switch: `ROUTER_MODE`, which the harness already runs both ways. `make eval-conditions` runs the matrix once per combination of `classifier` × `allowlist`, writing `eval/results/results_classifier-<on|off>_allowlist-<on|off>.csv`, then prints one table across them (`eval/metrics.py --summary`). With memory that covers all 8 combinations. Combinations the router refuses are skipped with a note. Every results row has a `controls` column, and the startup and decision records carry the switches, so each number traces back to the protections that produced it. A single run can also be overridden: `harness/matrix.py --controls classifier=off`. `ROUTER_LOCK=true` rejects `classifier=off`.
 
 **Sanity-check the run.** In the progress log, every turn should resolve to `allow`, `route-hardened`, `strip-tools`, or `block`. If you see `['unknown', ...]`, the proxy is rejecting requests. Check `docker logs deploy-litellm-1` for `classifier is required but not configured`. A quick check against the finished CSV:
 

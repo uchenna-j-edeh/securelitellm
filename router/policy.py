@@ -271,4 +271,12 @@ def load_policy_document(path: str | Path | None = None) -> dict[str, Any]:
     return raw
 
 
-_POLICY_SECTIONS = {"thresholds", "rules", "data_classes", "prompts", "routes", "matrix"}
+_POLICY_SECTIONS = {
+    "thresholds",
+    "rules",
+    "data_classes",
+    "prompts",
+    "routes",
+    "matrix",
+    "controls",
+}

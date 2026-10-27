@@ -433,3 +433,126 @@ def test_prevention_metrics_leave_dr_fpr_and_br_unchanged():
     assert (before["PR"], before["post_FPR"]) == (None, None)
     assert (after["n_post_attack"], after["PR"]) == (2, 0.5)
     assert (after["n_post_benign"], after["post_FPR"]) == (2, 0.5)
+
+
+# ── combinations of protection switches (#196) ───────────────────────────────
+
+
+def test_conditions_cover_every_combination_of_the_switches():
+    from harness.matrix import CONDITIONS, conditions_csv
+
+    assert {c.label() for c in CONDITIONS} == {
+        "classifier=on,allowlist=off",
+        "classifier=on,allowlist=on",
+        "classifier=off,allowlist=off",
+        "classifier=off,allowlist=on",
+    }
+    names = {conditions_csv(c).name for c in CONDITIONS}
+    assert "results_classifier-off_allowlist-off.csv" in names
+    assert len(names) == 4  # one file each
+
+
+def test_run_conditions_skips_combinations_the_router_refuses(monkeypatch, tmp_path):
+    from harness import matrix
+
+    ran: list[tuple[str, str]] = []
+    monkeypatch.setattr(matrix, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(
+        matrix, "run_matrix", lambda n, dry, controls, out: ran.append((controls, out.name))
+    )
+    written = matrix.run_conditions(n_seeds=1, dry_run=True)
+
+    # allowlist=on is refused until #167 lands.
+    assert [c for c, _ in ran] == ["classifier=on,allowlist=off", "classifier=off,allowlist=off"]
+    assert [p.name for p in written] == [name for _, name in ran]
+
+
+def test_rows_record_the_controls(monkeypatch):
+    from harness.matrix import CSV_FIELDS, _row
+
+    tr = TurnResult(
+        scenario_id="sc-001",
+        scenario_label="attack",
+        scenario_class="direct_exfil",
+        turn_name="t",
+        turn_index=0,
+        is_attack_turn=True,
+        session_id="s",
+        seed=0,
+        action="block",
+        risk_score=1.0,
+        matched_rules=[],
+        latency_ms=1.0,
+        proxy_ok=True,
+    )
+    row = _row("session", "L3", "incremental", tr, "classifier=off,allowlist=off")
+    assert row["controls"] == "classifier=off,allowlist=off"
+    assert set(row) == set(CSV_FIELDS)
+
+
+def test_summary_prints_one_row_per_condition_and_mode(tmp_path, capsys):
+    import csv as _csv
+
+    from eval.metrics import print_summary
+
+    path = tmp_path / "results_classifier-off_allowlist-off.csv"
+    rows = [
+        {
+            **_make_row(mode, "L3", "direct_exfil", label, label == "attack", action),
+            "controls": "classifier=off,allowlist=off",
+        }
+        for mode in ("stateless", "session")
+        for label, action in (("attack", "block"), ("benign", "allow"))
+    ]
+    with path.open("w", newline="") as fh:
+        writer = _csv.DictWriter(fh, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print_summary([path])
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("classifier=")]
+    assert len(lines) == 2  # stateless and session
+    assert all("100.0%" in ln for ln in lines)  # DR at L3
+
+
+def test_run_matrix_writes_the_controls_on_every_row(monkeypatch, tmp_path):
+    import csv as _csv
+
+    from harness import matrix
+
+    def fake_replay(scenario, seed, history_mode):
+        return [
+            TurnResult(
+                scenario_id=scenario.id,
+                scenario_label=scenario.label,
+                scenario_class=scenario.scenario_class,
+                turn_name="t",
+                turn_index=0,
+                is_attack_turn=False,
+                session_id="s",
+                seed=seed,
+                action="allow",
+                risk_score=0.0,
+                matched_rules=[],
+                latency_ms=1.0,
+                proxy_ok=True,
+            )
+        ]
+
+    started: list[str] = []
+    monkeypatch.setattr(matrix, "RESULTS_DIR", tmp_path)
+    one = matrix.load_corpus()[:1]
+    monkeypatch.setattr(matrix, "load_corpus", lambda: one)
+    monkeypatch.setattr(matrix, "clear_log", lambda: None)
+    monkeypatch.setattr(matrix, "start_proxy", lambda m, lvl, c: started.append(c))
+    monkeypatch.setattr(matrix, "wait_healthy", lambda timeout: None)
+    monkeypatch.setattr(matrix, "stop_proxy", lambda: None)
+    monkeypatch.setattr(matrix.time, "sleep", lambda s: None)
+    monkeypatch.setattr(matrix, "replay_scenario", fake_replay)
+
+    out = tmp_path / "r.csv"
+    matrix.run_matrix(n_seeds=1, controls="classifier=off", out=out)
+
+    rows = list(_csv.DictReader(out.open()))
+    assert rows and {r["controls"] for r in rows} == {"classifier=off,allowlist=off"}
+    assert set(started) == {"classifier=off"}  # passed to every proxy start

@@ -38,6 +38,7 @@ from litellm.integrations.custom_logger import CustomLogger
 
 from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
+from router.controls import resolve_controls
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
 from router.policy import (
@@ -220,8 +221,14 @@ class RouterHook(CustomLogger):
         super().__init__()
         self.config = RouterConfig.from_env()
         self.decision_logger = DecisionLogger(self.config.log_path)
-        self._classifier: BaseClassifier | None = _init_classifier(self.config.classifier_backend)
         policy_document = load_policy_document(self.config.policy_path or None)
+        self._controls = resolve_controls(policy_document)
+        if self.config.lock and not self._controls.classifier:
+            raise ValueError("ROUTER_LOCK=true rejects unsafe config: classifier=off")
+        # classifier=off (#196): not part of this configuration, so not created.
+        self._classifier: BaseClassifier | None = (
+            _init_classifier(self.config.classifier_backend) if self._controls.classifier else None
+        )
         self._policy = PolicyEngine.from_mapping(policy_document)
         self._routing = RoutingTable.from_mapping(policy_document)
         if self.config.lock and self._routing.source == "legacy":
@@ -229,7 +236,11 @@ class RouterHook(CustomLogger):
         verify_model_groups(self._routing, self.config.litellm_config_path)
         self._issued: OrderedDict[str, str] = OrderedDict()
         self.decision_logger.emit(
-            {**self.config.startup_record(), "routing": self._routing.summary()}
+            {
+                **self.config.startup_record(),
+                "controls": self._controls.summary(),
+                "routing": self._routing.summary(),
+            }
         )
 
     def _issue_session(self, request_id: str, owner: str) -> _Session:
@@ -300,6 +311,7 @@ class RouterHook(CustomLogger):
                     "request_id": request_id,
                     "mode": self.config.mode,
                     "level": self.config.level,
+                    "controls": self._controls.summary(),
                     "features": {"session_violation": exc.reason, **exc.detail},
                     "risk_score": 1.0,
                     "action": "block",
@@ -421,7 +433,7 @@ class RouterHook(CustomLogger):
 
         # Classifier is mandatory whenever untrusted tool results are present.
         # No valid production path bypasses classification.
-        if untrusted_sources and self._classifier is None:
+        if untrusted_sources and self._controls.classifier and self._classifier is None:
             import litellm.exceptions as _le
 
             raise _le.BadRequestError(
@@ -466,7 +478,7 @@ class RouterHook(CustomLogger):
             # Refresh after recording so the logged feature and policy both see
             # taint set by tool results in the current request.
             features["untrusted_seen"] = store.state(session_id).tainted
-        else:
+        elif self._controls.classifier:
             # Stateless: no session memory, so judge the current request on the
             # classifier's verdict rather than bare provenance. Untrusted content
             # counts as "seen" only if it was flagged INJECTION, or the classifier
@@ -474,6 +486,9 @@ class RouterHook(CustomLogger):
             features["untrusted_seen"] = features.get(
                 "classifier_injection", False
             ) or features.get("classifier_error", False)
+        else:
+            # classifier=off (#196): provenance only — any untrusted source counts.
+            features["untrusted_seen"] = bool(untrusted_sources)
 
         # M4: evaluate policy rules → risk score → risk level → route (#140)
         risk_score, risk_level, matched_rules = self._policy.assess(features)
@@ -502,6 +517,7 @@ class RouterHook(CustomLogger):
                 "request_id": request_id,
                 "mode": self.config.mode,
                 "level": self.config.level,
+                "controls": self._controls.summary(),
                 "features": features,
                 "risk_score": round(risk_score, 4),
                 "risk_level": risk_level,
@@ -601,11 +617,14 @@ class RouterHook(CustomLogger):
                 verdict.get("label") == "UNKNOWN" for verdict in verdicts
             )
 
-        if self.config.mode != "session":
+        if self.config.mode != "session" and self._controls.classifier:
             # Stateless: judge on the classifier verdict, not bare provenance.
             features["untrusted_seen"] = features.get(
                 "classifier_injection", False
             ) or features.get("classifier_error", False)
+        elif self.config.mode != "session":
+            # classifier=off (#196): provenance only — any untrusted source counts.
+            features["untrusted_seen"] = bool(untrusted_sources)
 
         if self.config.level == "L3":
             if self.config.mode == "session":
@@ -613,10 +632,11 @@ class RouterHook(CustomLogger):
             else:
                 # Stateless: only content the classifier actually flagged INJECTION
                 # is a tainted span — a clean file emailed verbatim must not match.
+                # With classifier=off (#196) every untrusted source is tainted.
                 tainted_hashes = [
                     s["content_hash"]
                     for s in untrusted_sources
-                    if s.get("tool_call_id") in injected_ids
+                    if not self._controls.classifier or s.get("tool_call_id") in injected_ids
                 ]
             features["tainted_spans_in_sink_args"] = tainted_spans_in_sink_args(
                 tainted_hashes,
@@ -648,6 +668,7 @@ class RouterHook(CustomLogger):
                 "request_id": request_id,
                 "mode": self.config.mode,
                 "level": self.config.level,
+                "controls": self._controls.summary(),
                 "features": features,
                 "risk_score": round(risk_score, 4),
                 "risk_level": risk_level,
