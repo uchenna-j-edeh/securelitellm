@@ -546,6 +546,9 @@ make classifier-up
 CLASSIFIER_BACKEND=local make eval
 ```
 
+See the [corpus scenario authoring guide](corpus/README.md) for the YAML schema,
+`expected_detects` semantics, valid values, and an annotated example.
+
 `make eval` runs `harness/matrix.py --seeds 3` (900 runs) and then `eval/metrics.py --table --figures`. With the mock model it takes about 8 minutes. It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
 
 **Combinations of protections (#196).** Each protection is a switch in the policy's `controls:` section, overridable with `ROUTER_CONTROLS`:
@@ -788,7 +791,7 @@ A missed injection then can't exfiltrate, at the cost of more holds on benign "r
 
 ```
 router/        hook, session store, taint engine, policy, classifiers
-corpus/        attack scenarios (YAML), taxonomy map
+corpus/        attack scenarios (YAML), authoring guide, taxonomy map
 harness/       mock MCP server, scripted agent driver, matrix runner
 eval/          metrics, notebooks, figures
 docs/adr/      architecture decision records
