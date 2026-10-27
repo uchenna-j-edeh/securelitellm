@@ -72,6 +72,7 @@ _LEGACY_THRESHOLD_KEYS = {
 _ALLOWED_FEATURES = {
     "classifier_error",
     "classifier_injection",
+    "destination_not_allowed",
     "legacy_function_calling",
     "malformed_tool_call",
     "sink_requested",
@@ -279,4 +280,5 @@ _POLICY_SECTIONS = {
     "routes",
     "matrix",
     "controls",
+    "allowed_destinations",
 }
