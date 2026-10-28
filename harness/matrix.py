@@ -10,7 +10,7 @@ Usage:
     uv run python harness/matrix.py [--seeds N] [--dry-run]
 
 To run with the local DeBERTa classifier:
-    CLASSIFIER_BACKEND=local uv run python harness/matrix.py --seeds 3
+    CLASSIFIER_BACKEND=local uv run python harness/matrix.py
 """
 
 from __future__ import annotations
@@ -226,7 +226,7 @@ def conditions_csv(controls: Controls) -> Path:
     return RESULTS_DIR / f"results_{slug}.csv"
 
 
-def run_conditions(n_seeds: int = 3, dry_run: bool = False) -> list[Path]:
+def run_conditions(n_seeds: int = 1, dry_run: bool = False) -> list[Path]:
     """Run the matrix once per combination of switches; one results CSV each."""
     written = []
     for controls in CONDITIONS:
@@ -243,7 +243,7 @@ def run_conditions(n_seeds: int = 3, dry_run: bool = False) -> list[Path]:
 
 
 def run_matrix(
-    n_seeds: int = 3, dry_run: bool = False, controls: str = "", out: Path | None = None
+    n_seeds: int = 1, dry_run: bool = False, controls: str = "", out: Path | None = None
 ) -> None:
     out = out or RESULTS_CSV
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -261,7 +261,8 @@ def run_matrix(
     print(f"Controls: {controls_label}")
     print(f"Total runs: {len(corpus) * n_seeds * n_history_runs}\n")
 
-    with out.open("w", newline="") as fh:
+    # A dry run must not truncate the results of the last real run.
+    with (Path(os.devnull) if dry_run else out).open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
         writer.writeheader()
 
@@ -307,7 +308,12 @@ def run_matrix(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seeds", type=int, default=3, help="runs per scenario (default 3)")
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=1,
+        help="runs per scenario (default 1; use more with a live model)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="enumerate only, no proxy")
     parser.add_argument(
         "--controls",

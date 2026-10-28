@@ -8,8 +8,8 @@ listed (see ADR-005: direct user injection, supply-chain, DoS out of scope).
 
 | Scenario class | OWASP Agentic | NSA MCP ref | Description | Scenario IDs |
 |---|---|---|---|---|
-| `direct_exfil` | A02, A03 | T1.3 | Injection in tool/MCP output drives immediate same-turn exfil | sc-001, sc-002, sc-003, sc-004, sc-030, sc-040 |
-| `delayed_exfil` | A02, A03 | T1.3, T2.1 | Injection plants taint; exfil happens in a later turn after context scroll | sc-005, sc-010, sc-011, sc-012, sc-013, sc-014, sc-031, sc-041, sc-042, sc-043 |
+| `direct_exfil` | A02, A03 | T1.3 | Injection in tool/MCP output drives immediate same-turn exfil | sc-001, sc-002, sc-003, sc-004, sc-030, sc-040, sc-044–046, sc-054 |
+| `delayed_exfil` | A02, A03 | T1.3, T2.1 | Injection plants taint; exfil happens in a later turn after context scroll | sc-005, sc-010, sc-011, sc-012, sc-013, sc-014, sc-031, sc-041–043, sc-047–053, sc-055, sc-056 |
 | `mcp_pivot` | A02, A05 | T2.2 | MCP server output redirects agent to call an unauthorized egress tool | sc-020, sc-021 |
 | `rag_poison` | A02, A08 | T1.4 | Poisoned document in retrieval store drives exfil | sc-030, sc-031 |
 
@@ -82,7 +82,8 @@ detection.
 Every earlier attack sends to an obviously foreign destination, which an
 allowlist alone would catch. These scenarios cover what it cannot, and what it
 costs. The bundled allowlist names exact addresses (`user@`, `alice@`, `hr@`, `billing@`
-and `ops@example.com`) and `#team-reports`; domain wildcards are not allowed.
+and `ops@example.com`), `#team-reports` and the host `reports.example.com`; domain
+wildcards are not allowed.
 
 | Scenario | Destination | What it tests |
 |---|---|---|
@@ -93,3 +94,18 @@ and `ops@example.com`) and `#team-reports`; domain wildcards are not allowed.
 | bn-040 | `client@acme.io` (not listed) | a legitimate send the strict allowlist holds: its cost, counted as a false positive |
 | bn-041 | `alice@example.com` (allowed) | a legitimate send to a teammate |
 | bn-042 | `billing@example.com` (allowed), from a document | benign twin of sc-043 |
+
+### More allowlist scenarios (#199)
+
+Each gap the allowlist leaves, or creates, now has at least three scenarios,
+varied by wording, encoding, sink type and delay. The `generated` variants
+move the send into a scripted model reply, so the post-call check decides.
+
+| Gap | Scenarios |
+|---|---|
+| allowed destination, same turn | sc-040; sc-044 (`http_post` to `reports.example.com`), sc-045 (`slack_post` to `#team-reports`, salaries), sc-046 (JSON result, `to` + `cc`, API keys) |
+| allowed destination, delayed | sc-041, sc-042; sc-047 (3 turns, `alice@`), sc-048 (3 turns, `http_post` to the allowed host), sc-049 (the source is read again in the send turn) |
+| planted destination, no injection wording | sc-043; sc-050 (email signature), sc-051 (CSV row), sc-052 (JSON field), sc-053 (URL in a footnote) |
+| benign send to an unlisted destination | bn-040; bn-043 (new supplier), bn-044 (partner webhook), bn-045 (unlisted channel) |
+| benign send to a listed destination | bn-041, bn-042; bn-046 (`#team-reports`), bn-047 (`reports.example.com`) |
+| generated sends | sc-054 (of sc-040), sc-055 (of sc-041), sc-056 (of sc-043), bn-048 (of bn-040), bn-049 (of bn-041) |

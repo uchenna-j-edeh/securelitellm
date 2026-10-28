@@ -222,12 +222,11 @@ def test_matrix_dry_run(tmp_path, monkeypatch):
     """Dry-run enumerates all (mode, level, scenario, seed) combos without Docker."""
     from harness import matrix as mat
 
-    monkeypatch.setattr(mat, "RESULTS_CSV", tmp_path / "results.csv")
+    results = tmp_path / "results.csv"
+    results.write_text("mode,level\nsession,L3\n")  # the last real run
+    monkeypatch.setattr(mat, "RESULTS_CSV", results)
     mat.run_matrix(n_seeds=1, dry_run=True)
-    # CSV should have header only (dry-run writes no data rows)
-    lines = (tmp_path / "results.csv").read_text().splitlines()
-    assert lines[0].startswith("mode,")
-    assert len(lines) == 1  # header only
+    assert results.read_text() == "mode,level\nsession,L3\n"  # left untouched
 
 
 # ── corpus-schema round-trip ──────────────────────────────────────────────────
@@ -501,19 +500,21 @@ def test_rows_record_the_controls(monkeypatch):
     assert set(row) == set(CSV_FIELDS)
 
 
-def test_summary_prints_one_row_per_condition_and_mode(tmp_path, capsys):
+def test_summary_prints_one_row_per_condition_and_memory(tmp_path, capsys):
     import csv as _csv
 
     from eval.metrics import print_summary
 
     path = tmp_path / "results_classifier-off_allowlist-off.csv"
+    memories = (("stateless", "incremental"), ("stateless", "full"), ("session", "incremental"))
     rows = [
         {
             **_make_row(mode, "L3", "direct_exfil", label, label == "attack", action),
+            "history_mode": history,
             "controls": "classifier=off,allowlist=off",
         }
-        for mode in ("stateless", "session")
-        for label, action in (("attack", "block"), ("benign", "allow"))
+        for mode, history in memories
+        for label, action in (("attack", "block"), ("attack", "allow"), ("benign", "allow"))
     ]
     with path.open("w", newline="") as fh:
         writer = _csv.DictWriter(fh, fieldnames=list(rows[0]))
@@ -522,8 +523,12 @@ def test_summary_prints_one_row_per_condition_and_mode(tmp_path, capsys):
 
     print_summary([path])
     lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("classifier=")]
-    assert len(lines) == 2  # stateless and session
-    assert all("100.0%" in ln for ln in lines)  # DR at L3
+    assert [ln.split()[1:3] for ln in lines] == [
+        ["stateless,", "full"],
+        ["stateless,", "incremental"],
+        ["session,", "incremental"],
+    ]
+    assert all("50.0%" in ln and "1/2" in ln and "0/1" in ln for ln in lines)  # L3 counts
 
 
 def test_run_matrix_writes_the_controls_on_every_row(monkeypatch, tmp_path):
