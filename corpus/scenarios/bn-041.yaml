@@ -1,5 +1,5 @@
-# Benign send to a teammate on the allowlist (#167): alice@example.com matches
-# @example.com. Allowed in every combination.
+# Benign send to a teammate on the allowlist (#167): alice@example.com is listed
+# exactly. Allowed in every combination.
 
 id: bn-041
 name: benign_send_to_listed_teammate
