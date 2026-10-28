@@ -54,9 +54,11 @@ def test_bad_controls_stop_startup(doc, env, message):
         resolve_controls(doc, env=env)
 
 
-def test_allowlist_on_is_refused_until_it_exists():
-    with pytest.raises(ValueError, match="#167"):
+def test_allowlist_on_needs_the_destination_list():
+    with pytest.raises(ValueError, match="allowed_destinations"):
         resolve_controls({}, env="allowlist=on")
+    doc = {"allowed_destinations": ["alice@example.com"]}
+    assert resolve_controls(doc, env="allowlist=on").allowlist is True
 
 
 def test_parse_env_ignores_blanks():

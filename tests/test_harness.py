@@ -452,7 +452,7 @@ def test_conditions_cover_every_combination_of_the_switches():
     assert len(names) == 4  # one file each
 
 
-def test_run_conditions_skips_combinations_the_router_refuses(monkeypatch, tmp_path):
+def test_run_conditions_runs_every_combination(monkeypatch, tmp_path):
     from harness import matrix
 
     ran: list[tuple[str, str]] = []
@@ -462,9 +462,20 @@ def test_run_conditions_skips_combinations_the_router_refuses(monkeypatch, tmp_p
     )
     written = matrix.run_conditions(n_seeds=1, dry_run=True)
 
-    # allowlist=on is refused until #167 lands.
-    assert [c for c, _ in ran] == ["classifier=on,allowlist=off", "classifier=off,allowlist=off"]
+    assert len(ran) == 4
     assert [p.name for p in written] == [name for _, name in ran]
+
+
+def test_run_conditions_skips_combinations_the_router_refuses(monkeypatch, tmp_path):
+    from harness import matrix
+
+    ran: list[str] = []
+    monkeypatch.setattr(matrix, "RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(matrix, "load_policy_document", lambda path=None: {})  # no allowlist
+    monkeypatch.setattr(matrix, "run_matrix", lambda n, dry, controls, out: ran.append(controls))
+    matrix.run_conditions(n_seeds=1, dry_run=True)
+
+    assert ran == ["classifier=on,allowlist=off", "classifier=off,allowlist=off"]
 
 
 def test_rows_record_the_controls(monkeypatch):
