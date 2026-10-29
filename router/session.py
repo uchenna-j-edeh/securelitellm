@@ -286,8 +286,21 @@ class SessionStore:
 
 
 # Module-level singleton shared across all hook instances in the same process.
-_store = SessionStore.from_env()
+def _create_store():
+    backend = os.getenv("SESSION_BACKEND", "memory").lower()
+
+    if backend == "redis":
+        from router.redis_session import RedisSessionStore
+        return RedisSessionStore.from_env()
+
+    if backend == "memory":
+        return SessionStore.from_env()
+
+    raise ValueError(f"Unsupported SESSION_BACKEND: {backend}")
 
 
-def get_store() -> SessionStore:
+_store = _create_store()
+
+
+def get_store():
     return _store
