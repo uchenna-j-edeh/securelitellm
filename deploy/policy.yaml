@@ -16,10 +16,32 @@
 # ROUTER_CONTROLS="classifier=off". Session memory is ROUTER_MODE.
 #   classifier  on:  tool results are judged by the injection classifier.
 #               off: provenance only — every untrusted tool result counts as untrusted.
-#   allowlist   every send destination must be allowlisted (#167; refused until built).
+#   allowlist   on:  every send destination must be in allowed_destinations below (#167).
+#               off: destinations are not checked.
 controls:
   classifier: on
   allowlist: off
+
+# Where sends may go when allowlist is on (#167). Every destination in a send
+# is checked: email to/cc/bcc, URLs, webhooks, Slack channels, recipients. A
+# send to anything else is held (rule destination_not_allowed below), and so
+# is a send with no destination found. Entry forms:
+#   alice@example.com        one exact address (no @domain wildcards, so every
+#                            allowed inbox has known owners)
+#   https://api.partner.com  any URL on that host (matched on the parsed host)
+#   "#team-reports"          one Slack channel (quoted: # starts a YAML comment)
+# Validated at startup even when the allowlist is off. The entries below are
+# the eval corpus's legitimate recipients; ops@, #team-reports and
+# reports.example.com are the allowed destinations the allowed-destination
+# attacks (sc-040–049) target.
+allowed_destinations:
+  - "user@example.com"
+  - "alice@example.com"
+  - "hr@example.com"
+  - "billing@example.com"
+  - "ops@example.com"
+  - "#team-reports"
+  - "https://reports.example.com"
 
 thresholds:
   elevated: 0.4
@@ -126,6 +148,14 @@ rules:
   - id: classifier_unavailable
     when:
       classifier_error: true
+    score: 0.75
+
+  # Allowlist (#167): a send to a destination not in allowed_destinations, or
+  # with no destination found. High risk, so the send is held. Only set when
+  # the allowlist control is on.
+  - id: destination_not_allowed
+    when:
+      destination_not_allowed: true
     score: 0.75
 
   # L3 — tainted span hashes found inside a sink's arguments.

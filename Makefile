@@ -52,13 +52,14 @@ dev:
 #   tool-result turn, no decision is logged, and every row reads `unknown` (silent ~6h no-op).
 # Override either on the command line, e.g. `HARNESS_MODEL=groq make eval`.
 eval:
-	CLASSIFIER_BACKEND=local HARNESS_MODEL=mock $(PYTHON) harness/matrix.py --seeds 3
+	CLASSIFIER_BACKEND=local HARNESS_MODEL=mock $(PYTHON) harness/matrix.py --seeds 1
 	$(PYTHON) eval/metrics.py --table --figures
 
 # Every combination of the protection switches (#196): one results CSV each,
-# then one table across them. Each combination is a full eval run (~8 min).
+# then one table across them. Each combination is a full eval run.
+# One seed: the mock model answers every seed identically (#199).
 eval-conditions:
-	CLASSIFIER_BACKEND=local HARNESS_MODEL=mock $(PYTHON) harness/matrix.py --seeds 3 --conditions
+	CLASSIFIER_BACKEND=local HARNESS_MODEL=mock $(PYTHON) harness/matrix.py --seeds 1 --conditions
 	$(PYTHON) eval/metrics.py --summary eval/results/results_classifier-*.csv
 
 # Quick dry-run (no Docker needed — just enumerates runs)

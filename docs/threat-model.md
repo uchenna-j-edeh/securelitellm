@@ -32,6 +32,17 @@
 
 Both the injection source and the sink action must occur within the same agent run (ADR-001).
 
+## Assumption: allowlisted destinations (#167)
+
+With the destination allowlist on, a send to a listed address, host or channel
+passes the allowlist. We still count leaks *to* an allowed destination as
+attacks: a shared inbox, a team channel, an insider without a need to know, or
+a compromised or forwarding mailbox can be the wrong recipient. Entries are
+exact (no `@domain` wildcards), so every allowed inbox has known owners. If
+allowlisted destinations are instead trusted fully, the allowed-destination
+scenarios (sc-040–042, sc-044–049) are not exfiltration, and session memory adds no detection over stateless once the
+allowlist is on (see [`results/protection-combinations.md`](results/protection-combinations.md)).
+
 ## Out of Scope
 
 - Direct user prompt injection (user is trusted)

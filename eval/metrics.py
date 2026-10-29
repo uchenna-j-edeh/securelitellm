@@ -316,14 +316,22 @@ def print_table(metrics: list[dict]) -> None:
     print()
 
 
+def _count(hits: int, total: int) -> str:
+    return f"{hits}/{total}" if total else "—"
+
+
 def print_summary(csv_paths: list[Path]) -> None:
-    """One table across combinations of switches (#196): one row per results CSV and mode."""
+    """One table across combinations of switches (#196): one row per results CSV and memory.
+
+    Memory is session, or stateless with incremental or full history. The L3
+    counts are turns, so with one seed they are scenarios (#199).
+    """
     header = (
-        f"{'controls':<30} {'mode':<10} "
+        f"{'controls':<30} {'memory':<22} "
         + " ".join(f"DR {lvl:<4}" for lvl in LEVELS)
         + "  "
         + " ".join(f"FPR {lvl:<3}" for lvl in LEVELS)
-        + "  PR L3   pFPR L3"
+        + "  caught L3  flagged L3  PR L3   pFPR L3"
     )
     print("== Combinations of switches (ALL classes) ==")
     print(header)
@@ -331,13 +339,32 @@ def print_summary(csv_paths: list[Path]) -> None:
         rows = load_rows(path)
         labels = {row.get("controls") or "" for row in rows}
         label = labels.pop() if len(labels) == 1 else f"{path.name} (mixed)"
-        metrics = compute_metrics(build_counters(rows))
-        index = {(m["mode"], m["level"]): m for m in metrics if m["class"] == "ALL"}
         for mode in MODES:
-            cells = [_pct(index[(mode, lvl)]["DR"]) for lvl in LEVELS]
-            cells += [""] + [_pct(index[(mode, lvl)]["FPR"]) for lvl in LEVELS]
-            cells += ["", _pct(index[(mode, "L3")]["PR"]), _pct(index[(mode, "L3")]["post_FPR"])]
-            print(f"{label or 'policy':<30} {mode:<10} " + " ".join(f"{c:>7}" for c in cells))
+            histories = sorted(
+                {row.get("history_mode") or "" for row in rows if row["mode"] == mode}
+            )
+            for history in histories:
+                group = [
+                    row
+                    for row in rows
+                    if row["mode"] == mode and (row.get("history_mode") or "") == history
+                ]
+                metrics = compute_metrics(build_counters(group))
+                index = {
+                    m["level"]: m for m in metrics if m["mode"] == mode and m["class"] == "ALL"
+                }
+                l3 = index["L3"]
+                cells = [_pct(index[lvl]["DR"]) for lvl in LEVELS]
+                cells += [""] + [_pct(index[lvl]["FPR"]) for lvl in LEVELS]
+                cells += [
+                    "",
+                    _count(l3["TP"], l3["n_attack"]),
+                    _count(l3["FP"], l3["n_benign"]),
+                    _pct(l3["PR"]),
+                    _pct(l3["post_FPR"]),
+                ]
+                memory = f"{mode}, {history}" if history else mode
+                print(f"{label or 'policy':<30} {memory:<22} " + " ".join(f"{c:>7}" for c in cells))
 
 
 def write_json(metrics: list[dict], path: Path) -> None:

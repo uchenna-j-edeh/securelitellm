@@ -36,6 +36,7 @@ from typing import Any
 
 from litellm.integrations.custom_logger import CustomLogger
 
+from router.allowlist import Allowlist, sinks_with_arguments
 from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.controls import resolve_controls
@@ -223,6 +224,14 @@ class RouterHook(CustomLogger):
         self.decision_logger = DecisionLogger(self.config.log_path)
         policy_document = load_policy_document(self.config.policy_path or None)
         self._controls = resolve_controls(policy_document)
+        # Validated whenever present, so a typo fails at startup either way;
+        # enforced only with allowlist=on (#167).
+        allowlist = (
+            Allowlist.from_entries(policy_document["allowed_destinations"])
+            if "allowed_destinations" in policy_document
+            else None
+        )
+        self._allowlist = allowlist if self._controls.allowlist else None
         if self.config.lock and not self._controls.classifier:
             raise ValueError("ROUTER_LOCK=true rejects unsafe config: classifier=off")
         # classifier=off (#196): not part of this configuration, so not created.
@@ -423,6 +432,10 @@ class RouterHook(CustomLogger):
             data.get("stream") and (data.get("tools") or data.get("functions"))
         )
         features["legacy_function_calling"] = _uses_legacy_function_calling(data, messages)
+        if self._allowlist is not None:
+            _check_destinations(
+                features, self._allowlist, sinks_with_arguments(classify_sinks(messages), messages)
+            )
 
         sources = classify_sources(messages)
         # Trusted first-party sources (sink-result echoes) are never scanned or
@@ -644,6 +657,9 @@ class RouterHook(CustomLogger):
                 [_response_sink_message(egress_sinks)],
             )
 
+        if self._allowlist is not None:
+            _check_destinations(features, self._allowlist, egress_sinks)
+
         risk_score, assessed_level, matched_rules = self._policy.assess(features)
         risk_level = _max_level(assessed_level, pre_level or _MISSING_PRE_CALL_LEVEL)
         route = self._routing.resolve(risk_level, data_class)
@@ -717,6 +733,18 @@ def _output_action(
         # Any post-call policy hit holds sink calls, whatever the route (pre-#140 behavior).
         return "hold"
     return "execute"
+
+
+def _check_destinations(
+    features: dict[str, Any], allowlist: Allowlist, sinks: list[dict[str, Any]]
+) -> None:
+    """Set the allowlist features (#167): which send destinations are not listed.
+
+    Labels are domains, hosts or channels only, never a full address.
+    """
+    unlisted = allowlist.unlisted(sinks)
+    features["destination_not_allowed"] = bool(unlisted)
+    features["unlisted_destinations"] = unlisted
 
 
 def _init_classifier(backend: str) -> BaseClassifier | None:

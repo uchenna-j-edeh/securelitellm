@@ -549,16 +549,20 @@ CLASSIFIER_BACKEND=local make eval
 See the [corpus scenario authoring guide](corpus/README.md) for the YAML schema,
 `expected_detects` semantics, valid values, and an annotated example.
 
-`make eval` runs `harness/matrix.py --seeds 3` (900 runs) and then `eval/metrics.py --table --figures`. With the mock model it takes about 8 minutes. It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
+`make eval` runs `harness/matrix.py` with one seed (624 runs; the mock model answers every seed identically, so more seeds only repeat the same answers — use `--seeds N` with a live model) and then `eval/metrics.py --table --figures`. With the mock model it takes about 10 minutes; `make eval-conditions` runs it for each of the 4 switch settings (about 45 minutes). It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
 
 **Combinations of protections (#196).** Each protection is a switch in the policy's `controls:` section, overridable with `ROUTER_CONTROLS`:
 
 | Switch | `on` | `off` |
 |---|---|---|
 | `classifier` (default on) | tool results are judged by the injection classifier, which is then required | provenance only: every untrusted tool result counts as untrusted, in both modes (the #192 idea) |
-| `allowlist` (default off) | every send destination must be allowlisted (#167, refused until it is built) | destinations are not checked |
+| `allowlist` (default off) | every send destination must be in the policy's `allowed_destinations` (#167): see below | destinations are not checked |
 
-Session memory is the third switch: `ROUTER_MODE`, which the harness already runs both ways. `make eval-conditions` runs the matrix once per combination of `classifier` × `allowlist`, writing `eval/results/results_classifier-<on|off>_allowlist-<on|off>.csv`, then prints one table across them (`eval/metrics.py --summary`). With memory that covers all 8 combinations. Combinations the router refuses are skipped with a note. Every results row has a `controls` column, and the startup and decision records carry the switches, so each number traces back to the protections that produced it. A single run can also be overridden: `harness/matrix.py --controls classifier=off`. `ROUTER_LOCK=true` rejects `classifier=off`.
+Session memory is the third switch: `ROUTER_MODE`, which the harness already runs both ways. `make eval-conditions` runs the matrix once per combination of `classifier` × `allowlist`, writing `eval/results/results_classifier-<on|off>_allowlist-<on|off>.csv`, then prints one table across them (`eval/metrics.py --summary`). With memory that covers all 8 combinations. Combinations the router refuses are skipped with a note.
+
+**Which combination to run.** All 8 combinations were measured once on 52 scenarios; the winner is session + classifier + allowlist, which catches 22 of 26 attack turns and flags 5 of 20 benign turns (4 of the 5 are legitimate sends to unlisted destinations). Results, what each layer contributes, and the limitations: [`docs/results/protection-combinations.md`](docs/results/protection-combinations.md).
+
+**Destination allowlist (#167).** With `allowlist=on`, every destination in a send must be listed in the policy's `allowed_destinations`, wherever it came from: email to/cc/bcc (lists and display names included), URLs and endpoints, webhooks, Slack channels and message recipients. Entries are an exact address (`alice@example.com`; `@example.com` domain wildcards are rejected, so every allowed inbox has known owners), a URL host (`https://api.partner.com`, matched on the parsed host, so `https://api.partner.com@evil.io/` and `https://api.partner.com.evil.io/` are refused) or a channel (`"#team-reports"`). A send to anything else, or with no destination found, sets `destination_not_allowed`, which the bundled policy scores high: pre-call removes tools, post-call holds the generated call. Sends are tools in the exfil category plus tools of unknown capability; file writes and reads are not checked (#93). Decision records name a refused destination by domain, host or channel only (`unlisted_destinations`), never the full address. The list is validated at startup even when the allowlist is off. Being allowlisted means permitted, not trusted: the classifier and taint checks still apply. Every results row has a `controls` column, and the startup and decision records carry the switches, so each number traces back to the protections that produced it. A single run can also be overridden: `harness/matrix.py --controls classifier=off`. `ROUTER_LOCK=true` rejects `classifier=off`.
 
 **Sanity-check the run.** In the progress log, every turn should resolve to `allow`, `route-hardened`, `strip-tools`, or `block`. If you see `['unknown', ...]`, the proxy is rejecting requests. Check `docker logs deploy-litellm-1` for `classifier is required but not configured`. A quick check against the finished CSV:
 
@@ -595,7 +599,7 @@ Results also record the post-call record's `post_action`, `post_risk_level` and
 
 ```bash
 # CLASSIFIER_BACKEND=local adds the classifier sidecar overlay automatically
-CLASSIFIER_BACKEND=local uv run python harness/matrix.py --seeds 3
+CLASSIFIER_BACKEND=local uv run python harness/matrix.py
 uv run python eval/metrics.py --table --figures
 ```
 
@@ -603,7 +607,7 @@ Or swap to a different HuggingFace model:
 
 ```bash
 CLASSIFIER_MODEL=meta-llama/Prompt-Guard-86M CLASSIFIER_BACKEND=local \
-  uv run python harness/matrix.py --seeds 3
+  uv run python harness/matrix.py
 ```
 
 ### Quick dry-run (no Docker needed)

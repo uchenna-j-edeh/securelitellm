@@ -9,7 +9,8 @@ and stays there; this module covers the rest.
               off: the classifier is not part of the configuration. Every
                   untrusted tool result counts as untrusted because of where it
                   came from (provenance-only taint, #192), in both modes.
-  allowlist   on: every send destination must be on the allowlist (#167).
+  allowlist   on: every send destination must be on the policy's
+                  allowed_destinations (#167, router/allowlist.py).
               off: destinations are not checked.
 
 Set in the policy's ``controls:`` section; ROUTER_CONTROLS overrides it, e.g.
@@ -86,7 +87,7 @@ def resolve_controls(policy_document: dict[str, Any], env: str | None = None) ->
     controls = _apply(Controls(), section, "policy controls")
     env_value = os.environ.get(CONTROLS_ENV, "") if env is None else env
     controls = _apply(controls, parse_env(env_value), CONTROLS_ENV)
-    if controls.allowlist:
-        # Refuse rather than run without the protection the switch promises.
-        raise ValueError("allowlist=on is not implemented yet (#167)")
+    if controls.allowlist and "allowed_destinations" not in policy_document:
+        # Refuse rather than run without the list the switch promises to enforce.
+        raise ValueError("allowlist=on needs an allowed_destinations section in the policy")
     return controls
