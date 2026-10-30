@@ -1,4 +1,4 @@
-.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay
+.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay gmail-auth
 
 # Well-known key used exclusively for E2E tests — never the production key.
 E2E_KEY := sk-test-e2e-key
@@ -94,6 +94,11 @@ demo-tools:
 	@set -a; . ./deploy/.env; set +a; exec $(PYTHON) demo/mcp_server.py
 
 demo-mcp: demo-tools
+
+# Sign in to the demo Gmail account once per scope (read, send); see scripts/gmail_auth.py.
+gmail-auth:
+	@test -n "$(SCOPE)" || (echo "usage: make gmail-auth SCOPE=read|send" >&2; exit 2)
+	$(PYTHON) scripts/gmail_auth.py $(SCOPE)
 
 demo:
 	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)
