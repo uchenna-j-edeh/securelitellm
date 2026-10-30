@@ -80,6 +80,94 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "list_emails",
+            "description": (
+                "List emails in the demo inbox label, newest first: id, sender, subject, "
+                "date and a snippet. Optionally filter with a Gmail search query."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Gmail search, e.g. from:x"},
+                    "max_results": {"type": "integer", "description": "1-25, default 10."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_email",
+            "description": "Read one email from the demo inbox label by its id.",
+            "parameters": {
+                "type": "object",
+                "properties": {"message_id": {"type": "string"}},
+                "required": ["message_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_jira",
+            "description": (
+                "Search tickets in the demo Jira project: key, summary, status, assignee. "
+                "Leave query empty for the most recently updated tickets."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer", "description": "1-25, default 10."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_jira_issue",
+            "description": "Read one Jira ticket by key, e.g. DEMO-12: description and comments.",
+            "parameters": {
+                "type": "object",
+                "properties": {"issue_key": {"type": "string"}},
+                "required": ["issue_key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_github_issues",
+            "description": (
+                "List issues in the demo GitHub repository, most recently updated first. "
+                "Optionally search their text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "state": {"type": "string", "enum": ["open", "closed", "all"]},
+                    "max_results": {"type": "integer", "description": "1-25, default 10."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_github_issue",
+            "description": "Read one GitHub issue by number: body and comments.",
+            "parameters": {
+                "type": "object",
+                "properties": {"number": {"type": "integer"}},
+                "required": ["number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_email",
             "description": "Send an email to one approved demo recipient.",
             "parameters": {

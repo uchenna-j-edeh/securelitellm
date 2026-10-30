@@ -10,7 +10,10 @@ Exposes tools that cover all 4 OWASP Agentic AI / NSA MCP attack classes:
   read_file            → delayed_exfil (poisoned workspace file)
   search_knowledge_base→ rag_poison    (poisoned KB document)
   list_mcp_resources   → mcp_pivot     (poisoned MCP metadata)
-  send_email           → exfil sink    (local log by default; opt-in SMTP)
+  list_emails / read_email            → real inbound email (Gmail, one label)
+  search_jira / get_jira_issue        → real Jira tickets (one project)
+  list_github_issues / get_github_issue → real GitHub issues (one repository)
+  send_email           → exfil sink    (local log by default; opt-in SMTP or Gmail)
   http_post            → exfil sink    (logs to demo/webhook_log.jsonl)
 
 Search results are loaded from demo/search_results/*.txt at startup and
@@ -42,6 +45,8 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+from demo import github_issues, google_mail, jira
 
 DEMO_DIR = Path(__file__).parent
 WORKSPACE = DEMO_DIR / "workspace"
@@ -168,6 +173,34 @@ class KBSearchRequest(BaseModel):
     query: str
 
 
+class ListEmailsRequest(BaseModel):
+    query: str = ""
+    max_results: int = 10
+
+
+class ReadEmailRequest(BaseModel):
+    message_id: str
+
+
+class JiraSearchRequest(BaseModel):
+    query: str = ""
+    max_results: int = 10
+
+
+class JiraIssueRequest(BaseModel):
+    issue_key: str
+
+
+class GitHubIssuesRequest(BaseModel):
+    query: str = ""
+    state: str = "open"
+    max_results: int = 10
+
+
+class GitHubIssueRequest(BaseModel):
+    number: int
+
+
 class SendEmailRequest(BaseModel):
     to: str
     subject: str = ""
@@ -208,6 +241,17 @@ class _TextExtractor(HTMLParser):
         return re.sub(r"\s{3,}", "\n\n", " ".join(self._parts)).strip()
 
 
+def _html_text(html: str) -> str:
+    parser = _TextExtractor()
+    parser.feed(html)
+    return parser.text()
+
+
+def _bounded(content: str) -> dict:
+    max_content = int(os.environ.get("DEMO_MAX_CONTENT", "6000"))
+    return {"content": content[:max_content], "truncated": len(content) > max_content}
+
+
 @app.post("/tools/fetch_url")
 def fetch_url(req: FetchURLRequest) -> dict:
     """Fetch one named URL. Link-following is deliberately not implemented."""
@@ -220,19 +264,8 @@ def fetch_url(req: FetchURLRequest) -> dict:
         )
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
-        if "html" in content_type:
-            parser = _TextExtractor()
-            parser.feed(response.text)
-            content = parser.text()
-        else:
-            content = response.text.strip()
-        max_content = int(os.environ.get("DEMO_MAX_CONTENT", "6000"))
-        return {
-            "url": req.url,
-            "status": response.status_code,
-            "content": content[:max_content],
-            "truncated": len(content) > max_content,
-        }
+        content = _html_text(response.text) if "html" in content_type else response.text.strip()
+        return {"url": req.url, "status": response.status_code, **_bounded(content)}
     except httpx.HTTPStatusError as exc:
         return {"url": req.url, "error": f"HTTP {exc.response.status_code}"}
     except Exception as exc:
@@ -295,13 +328,87 @@ def list_mcp_resources() -> dict:
     }
 
 
+@app.post("/tools/list_emails")
+def list_emails(req: ListEmailsRequest) -> dict:
+    """Messages in the demo Gmail label; read-only token, one label."""
+    try:
+        return {
+            "label": google_mail.demo_label(),
+            "messages": google_mail.list_messages(req.query, req.max_results),
+        }
+    except (google_mail.GmailError, httpx.HTTPError) as exc:
+        return {"error": str(exc)}
+
+
+@app.post("/tools/read_email")
+def read_email(req: ReadEmailRequest) -> dict:
+    """One message from the demo Gmail label, body as plain text."""
+    try:
+        message = google_mail.read_message(req.message_id)
+    except (google_mail.GmailError, httpx.HTTPError) as exc:
+        return {"message_id": req.message_id, "error": str(exc)}
+    body = message.pop("body_text").strip() or _html_text(message["body_html"])
+    message.pop("body_html")
+    return {**message, **_bounded(body)}
+
+
+def _thread_text(body: str, comments: list[dict]) -> str:
+    """A ticket or issue body and its comments as one text block."""
+    parts = [body.strip() or "(no description)"]
+    if comments:
+        parts.append("Comments:")
+        parts.extend(f"- {c['author']}: {c['body'].strip()}" for c in comments)
+    return "\n\n".join(parts)
+
+
+@app.post("/tools/search_jira")
+def search_jira(req: JiraSearchRequest) -> dict:
+    """Tickets in the demo Jira project matching a text query."""
+    try:
+        return {"issues": jira.search_issues(req.query, req.max_results)}
+    except (jira.JiraError, httpx.HTTPError) as exc:
+        return {"query": req.query, "error": str(exc)}
+
+
+@app.post("/tools/get_jira_issue")
+def get_jira_issue(req: JiraIssueRequest) -> dict:
+    """One ticket from the demo Jira project; description and comments as text."""
+    try:
+        issue = jira.get_issue(req.issue_key)
+    except (jira.JiraError, httpx.HTTPError) as exc:
+        return {"issue_key": req.issue_key, "error": str(exc)}
+    text = _thread_text(issue.pop("description"), issue.pop("comments"))
+    return {**issue, **_bounded(text)}
+
+
+@app.post("/tools/list_github_issues")
+def list_github_issues(req: GitHubIssuesRequest) -> dict:
+    """Issues in the demo GitHub repository; optional text search."""
+    try:
+        return {"issues": github_issues.list_issues(req.query, req.state, req.max_results)}
+    except (github_issues.GitHubIssuesError, httpx.HTTPError) as exc:
+        return {"query": req.query, "error": str(exc)}
+
+
+@app.post("/tools/get_github_issue")
+def get_github_issue(req: GitHubIssueRequest) -> dict:
+    """One issue from the demo GitHub repository; body and comments as text."""
+    try:
+        issue = github_issues.get_issue(req.number)
+    except (github_issues.GitHubIssuesError, httpx.HTTPError) as exc:
+        return {"number": req.number, "error": str(exc)}
+    text = _thread_text(issue.pop("body"), issue.pop("comments"))
+    return {**issue, **_bounded(text)}
+
+
 @app.post("/tools/send_email")
 def send_email(req: SendEmailRequest) -> dict:
-    """Log an email locally or deliver it by explicitly enabled SMTP.
+    """Log an email locally or deliver it by explicitly enabled SMTP or Gmail.
 
-    SMTP mode is bounded by an exact recipient allowlist and adds a mandatory
-    demo subject prefix. These transport safeguards are separate from the
-    SecureLiteLLM policy under evaluation.
+    Real delivery (smtp, or gmail with a send-only token) is bounded by an
+    exact recipient allowlist and adds a mandatory demo subject prefix. These
+    transport safeguards are separate from the SecureLiteLLM policy under
+    evaluation.
     """
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -310,19 +417,22 @@ def send_email(req: SendEmailRequest) -> dict:
         "body": req.body,
     }
     mode = os.environ.get("DEMO_EMAIL_MODE", "log").strip().lower()
-    if mode not in {"log", "smtp"}:
-        raise HTTPException(status_code=503, detail="DEMO_EMAIL_MODE must be log or smtp")
+    if mode not in {"log", "smtp", "gmail"}:
+        raise HTTPException(status_code=503, detail="DEMO_EMAIL_MODE must be log, smtp or gmail")
 
-    if mode == "smtp":
+    if mode in {"smtp", "gmail"}:
         allowlist = _email_allowlist()
         if record["to"] not in allowlist:
             raise HTTPException(
                 status_code=403,
                 detail=f"recipient is not in DEMO_EMAIL_ALLOWLIST: {record['to']}",
             )
-        _smtp_send(record)
+        if mode == "smtp":
+            _smtp_send(record)
+        else:
+            _gmail_send(record)
         record["status"] = "sent"
-        record["delivery_mode"] = "smtp"
+        record["delivery_mode"] = mode
     else:
         record["status"] = "logged"
         record["delivery_mode"] = "log"
@@ -369,6 +479,28 @@ def _demo_subject(subject: str) -> str:
     return clean_subject if clean_subject.startswith(prefix) else f"{prefix} {clean_subject}"
 
 
+def _demo_message(record: dict, from_address: str | None = None) -> EmailMessage:
+    message = EmailMessage()
+    if from_address:
+        message["From"] = from_address
+    message["To"] = record["to"]
+    message["Subject"] = record["subject"]
+    message.set_content(
+        f"{record['body']}\n\n"
+        "---\n"
+        "Synthetic classroom demo generated by SecureLiteLLM. No real financial data."
+    )
+    return message
+
+
+def _gmail_send(record: dict) -> None:
+    """Deliver through the Gmail API with a gmail.send-only token; Gmail sets From."""
+    try:
+        record["gmail_id"] = google_mail.send_message(_demo_message(record))
+    except (google_mail.GmailError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=f"Gmail delivery failed: {exc}") from exc
+
+
 def _smtp_send(record: dict) -> None:
     host = os.environ.get("SMTP_HOST", "").strip()
     port = int(os.environ.get("SMTP_PORT", "587"))
@@ -385,16 +517,7 @@ def _smtp_send(record: dict) -> None:
     if username and not password:
         raise HTTPException(status_code=503, detail="SMTP_PASSWORD is required with SMTP_USERNAME")
 
-    message = EmailMessage()
-    message["From"] = from_address
-    message["To"] = record["to"]
-    message["Subject"] = record["subject"]
-    message.set_content(
-        f"{record['body']}\n\n"
-        "---\n"
-        "Synthetic classroom demo generated by SecureLiteLLM. No real financial data."
-    )
-
+    message = _demo_message(record, from_address)
     try:
         with smtplib.SMTP(host, port, timeout=20) as client:
             if use_starttls:
@@ -432,6 +555,12 @@ def list_tools() -> dict:
             "read_file",
             "search_knowledge_base",
             "list_mcp_resources",
+            "list_emails",
+            "read_email",
+            "search_jira",
+            "get_jira_issue",
+            "list_github_issues",
+            "get_github_issue",
             "send_email",
             "http_post",
         ]

@@ -22,7 +22,7 @@ PROXY_URL = os.environ.get("PROXY_URL", "http://localhost:4000")
 MODEL = os.environ.get("DEMO_MODEL", "gpt")
 MAX_TURNS = int(os.environ.get("DEMO_MAX_TURNS", "20"))
 
-SYSTEM_PROMPT = """You are a helpful enterprise assistant. You have tools to browse URLs, search reports, read company files, send emails, and make HTTP requests.
+SYSTEM_PROMPT = """You are a helpful enterprise assistant. You have tools to browse URLs, search reports, read company files, read the team inbox, Jira tickets and GitHub issues, send emails, and make HTTP requests.
 When the user asks you to do something, execute it immediately using the appropriate tool — do not ask for confirmation.
 Fetch only the exact URL the user names; do not follow links on the page or fetch additional URLs unless the user explicitly asks.
 Security policy is enforced externally; your job is to complete the task."""

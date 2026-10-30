@@ -51,7 +51,7 @@ Groq API: model alias `gpt` -> `groq/openai/gpt-oss-120b` (low-risk requests)
 
 When the model generates a tool call:
 
-agent -> HTTP demo tool service :8002 -> file/web/SMTP operation
+agent -> HTTP demo tool service :8002 -> file, web, email (log/SMTP/Gmail), Jira or GitHub
 ```
 
 The agent is a small custom tool-calling loop, not a third-party agent framework. The
@@ -66,6 +66,72 @@ non-secret `session_ref` fingerprint.
 Docker provides reproducible isolation for both proxy modes, the local classifier, the
 mock fallback model, and the local quarantine model. The UI, agent, and tool service run on the host so their code
 can be restarted quickly during development.
+
+## Tools the agent can use
+
+The agent doesn't change when we connect a new product: we give it a new **tool**, a
+small function that calls the product's API.
+
+**The loop, each turn:**
+1. The agent sends the conversation, plus the list of tools in `demo/tools.py`, to the
+   model through SecureLiteLLM (session :4000 or stateless :4001).
+2. The model either answers, or asks to use a tool, e.g. `get_jira_issue("DEMO-12")`.
+3. The agent runs that tool on the tool service (`demo/mcp_server.py`, :8002), which calls
+   the file, website or product API.
+4. The agent sends the result back to the model, again through SecureLiteLLM.
+5. This repeats until the model gives a final answer (or after `DEMO_MAX_TURNS`).
+
+Because every turn passes through SecureLiteLLM, the gateway sees what the agent **read**
+(tool results, checked for injected instructions) and what it tries to **send** (tool
+calls, checked against the allowlist).
+
+| Tool | Reads or sends | What it reaches |
+|---|---|---|
+| `read_file` | reads | demo workspace files |
+| `web_search` | reads | the demo search corpus |
+| `fetch_url` | reads | one named web page |
+| `search_knowledge_base` | reads | the demo knowledge base |
+| `list_mcp_resources` | reads | demo MCP-style resource metadata |
+| `list_emails`, `read_email` | reads | one Gmail label (`securelitellm-demo`) |
+| `search_jira`, `get_jira_issue` | reads | one Jira project |
+| `list_github_issues`, `get_github_issue` | reads | issues in one GitHub repository |
+| `send_email` | sends | local outbox, or real email by SMTP or Gmail (allowlisted recipients) |
+| `http_post` | sends | logged locally (`demo/logs/webhook_log.jsonl`) |
+
+Gmail, Jira and GitHub are optional: each needs its own setup (see
+[One-time configuration](#one-time-configuration)). Until it's set up, the tool returns
+a "not configured" error to the model.
+
+### Adding a product
+
+Three small pieces:
+1. **A module that calls the product's API**, e.g. `demo/jira.py`: read-only, limited to
+   one project, repository or label, and returning errors rather than raising.
+2. **An endpoint** in `demo/mcp_server.py` that runs it, and its name in `/tools`.
+3. **A tool description** in `demo/tools.py`, so the model knows the tool exists and when
+   to use it.
+
+**Name tools by what they do.** SecureLiteLLM classifies a tool by its name
+(`router/taint.py`):
+- **reads:** names starting with or containing `list_`, `get_`, `search`, `read_file`,
+  `read_email`, `fetch_`, `query` or `retrieve_` run freely;
+- **sends:** names containing `send_email`, `send_message`, `http_post`, `forward`,
+  `upload` and similar, so the allowlist checks their destination;
+- **anything else** is treated as a send too (fail closed): the gateway holds it unless
+  its destination is found and allowed.
+
+So name a read tool clearly as a read, or every call to it gets held.
+`tests/test_demo_work_tools.py` checks that the new read tools are classed as reads.
+
+**Use dedicated demo accounts and least-privilege tokens,** e.g. separate Gmail tokens
+for reading and sending. Keep secrets in `deploy/.env` or git-ignored files.
+
+### Why not LiteLLM's built-in MCP gateway?
+
+Tool calls made through LiteLLM's MCP gateway (`/mcp-rest/tools/call`) skip SecureLiteLLM's
+hooks: their results never pass through the router, so they aren't checked or tainted.
+Running tools in our own agent loop keeps every read and every send in front of the
+gateway, which is what the demo shows.
 
 ## Portable email safety model
 
@@ -185,6 +251,64 @@ Gmail users normally use an App Password rather than their main account password
 Workspace policy may disable app passwords; if so, use an approved SMTP relay or another
 provider instead of weakening the account's security settings.
 
+### Real Gmail: read one label, send-only (optional)
+
+A Gmail App Password can also read the whole mailbox. For least privilege, use the Gmail
+API with two separate single-scope tokens instead. **Use a dedicated demo Gmail account.**
+Email bodies go to the model through SecureLiteLLM.
+
+1. **One-time Google setup:**
+   - create a Google Cloud project and enable the Gmail API;
+   - set up the OAuth consent screen, with the demo account as a test user;
+   - create an OAuth client of type **Desktop app**, and save it as
+     `deploy/gmail_client_secret.json` (git-ignored).
+2. **Sign in once per scope,** as the demo account each time:
+
+   ```bash
+   make gmail-auth SCOPE=read    # gmail.readonly -> deploy/gmail_read_token.json
+   make gmail-auth SCOPE=send    # gmail.send     -> deploy/gmail_send_token.json
+   ```
+
+   The tool service refuses a token that grants any other scope, so the read token can't
+   send and the send token can't read.
+3. **In Gmail,** create the label `securelitellm-demo` and file the demo mail there. The
+   agent's `list_emails` and `read_email` see only that label (`DEMO_GMAIL_LABEL`
+   changes it), not the rest of the inbox.
+4. **To send real email through Gmail,** set `DEMO_EMAIL_MODE=gmail` in `deploy/.env`. The
+   same recipient allowlist and subject prefix apply as in `smtp` mode.
+
+### Jira: read one project (optional)
+
+The agent's `search_jira` and `get_jira_issue` read tickets (description and comments)
+from one Jira Cloud project. Use an Atlassian account that can see only the demo project.
+
+```dotenv
+JIRA_BASE_URL=https://<site>.atlassian.net
+JIRA_EMAIL=<the account's email>
+JIRA_API_TOKEN=<an API token for that account>
+JIRA_PROJECT_KEY=DEMO
+```
+
+Searches are limited to that project, and a ticket key from any other project is refused.
+
+### GitHub issues: read one repository (optional)
+
+The agent's `list_github_issues` and `get_github_issue` read issues (body and comments)
+from one repository. Pull requests are refused.
+
+```dotenv
+GITHUB_ISSUES_REPO=<owner>/<name>
+# Optional for a public repository; required for a private one. Use a fine-grained
+# token limited to that repository with read-only access to Issues.
+GITHUB_ISSUES_TOKEN=<token>
+```
+
+**To the gateway, emails, tickets and issues are untrusted tool results,** like files and
+web pages. Anyone who can email the inbox, file a ticket or open an issue can write them.
+The router already classes `list_emails`, `read_email`, `search_jira`, `get_jira_issue`,
+`list_github_issues` and `get_github_issue` as reads, so they run freely. A send that
+follows them is checked like any other.
+
 ## Start the stack
 
 Docker Desktop must be running before the first command.
@@ -200,7 +324,7 @@ Docker Desktop must be running before the first command.
 # + local Ollama quarantine model (first start downloads ~1 GB)
 make demo-dual-up
 
-# Terminal 2: HTTP tool service; reads SMTP settings from deploy/.env
+# Terminal 2: HTTP tool service; reads email, Jira and GitHub settings from deploy/.env
 make demo-tools
 
 # Terminal 3: UI + custom agent
