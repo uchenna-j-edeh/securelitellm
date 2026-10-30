@@ -164,7 +164,10 @@ That's too much friction to recommend.
    - **Scenario count:** one run, 26 attack turns and 20 benign turns, all written by us. Scenarios written by someone who didn't design the controls are still open (#199).
    - **Deterministic model:** the mock model scripts its replies, so this measures the gateway's decisions, not how a real model behaves. A live-model check of the winner is still open (#199); live behaviour is shown in the demo runbook.
    - **Level differences aren't measured:** L0–L3 detected the same turns everywhere, so this corpus doesn't separate the levels' detection power.
-8. **The live demo isn't configured yet.** The demo proxies still run with the allowlist off. Switching them to the winner, and giving the attack files a separate, non-allowlisted recipient, is the next step.
+8. **The live demo shows the winner, but not every finding live.**
+   - **What's configured:** both demo proxies run the winner's switches; only their memory differs.
+   - **What the live beats show:** the allowlist holding planted and attack destinations.
+   - **What needs replays:** the live model mostly refuses injected instructions. So what session memory adds (sc-047), and the remaining gap (sc-045), are shown with scripted replays (`make demo-replay`; see the [runbook](../../demo/DEMO_RUNBOOK.md)).
 
 ## Reproduce
 

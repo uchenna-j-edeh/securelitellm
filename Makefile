@@ -1,4 +1,4 @@
-.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down
+.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay
 
 # Well-known key used exclusively for E2E tests — never the production key.
 E2E_KEY := sk-test-e2e-key
@@ -101,11 +101,21 @@ demo:
 
 # Dual-proxy demo stack — session proxy :4000 + stateless proxy :4001, one shared
 # DeBERTa classifier. Powers the live A/B delayed-exfil demo (UI mode switch).
+# Both proxies run the winning switches (classifier + allowlist) from the
+# generated deploy/policy.demo.yaml; only their memory differs.
 demo-dual-up:
+	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)
+	@set -a; . ./deploy/.env; set +a; $(PYTHON) scripts/demo_policy.py
 	docker compose --env-file deploy/.env \
 	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
 	               -f deploy/docker-compose.demo-dual.yml up -d --build
+
+# Replay a corpus scenario against both demo proxies (scripted turns, mock model):
+#   make demo-replay SCENARIO=sc-047
+demo-replay:
+	@test -n "$(SCENARIO)" || (echo "usage: make demo-replay SCENARIO=sc-047" >&2; exit 2)
+	@set -a; . ./deploy/.env; set +a; $(PYTHON) scripts/demo_replay.py $(SCENARIO)
 
 demo-dual-down:
 	docker compose --env-file deploy/.env \

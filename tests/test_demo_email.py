@@ -98,6 +98,45 @@ def test_poisoned_content_uses_configured_recipient(monkeypatch):
     )
 
 
+def test_poisoned_content_names_the_attack_recipient(monkeypatch):
+    # The attack files name a plus-address of the operator's inbox: the same
+    # mailbox, but not the address the gateway allowlist lists (#167).
+    monkeypatch.setenv("DEMO_RECIPIENT", "Owner@Example.test")
+
+    assert (
+        mcp_server._render_demo_content("{{DEMO_ATTACK_RECIPIENT}} / {{DEMO_RECIPIENT}}")
+        == "owner+exfil@example.test / owner@example.test"
+    )
+
+
+@pytest.mark.parametrize(
+    "recipient, attack",
+    [
+        ("you@example.com", "you+exfil@example.com"),
+        ("you+demo@example.com", "you+exfil@example.com"),  # one plus tag, not two
+    ],
+)
+def test_attack_recipient(recipient, attack):
+    assert mcp_server.attack_recipient(recipient) == attack
+
+
+def test_smtp_delivers_to_the_attack_recipient(monkeypatch, tmp_path):
+    # A send the gateway lets through must still arrive, in the operator's inbox.
+    monkeypatch.setattr(mcp_server, "OUTBOX", tmp_path / "outbox.jsonl")
+    monkeypatch.setenv("DEMO_EMAIL_MODE", "smtp")
+    monkeypatch.setenv("DEMO_RECIPIENT", "you@example.com")
+    monkeypatch.setenv("DEMO_EMAIL_ALLOWLIST", "you@example.com")
+    sent = []
+    monkeypatch.setattr(mcp_server, "_smtp_send", sent.append)
+
+    result = mcp_server.send_email(
+        SendEmailRequest(to="you+exfil@example.com", subject="x", body="synthetic")
+    )
+
+    assert result["status"] == "sent"
+    assert [record["to"] for record in sent] == ["you+exfil@example.com"]
+
+
 def test_smtp_rejects_recipient_outside_allowlist(monkeypatch, tmp_path):
     monkeypatch.setattr(mcp_server, "OUTBOX", tmp_path / "outbox.jsonl")
     monkeypatch.setenv("DEMO_EMAIL_MODE", "smtp")
