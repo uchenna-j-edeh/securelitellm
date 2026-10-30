@@ -52,6 +52,8 @@ WEBHOOK_LOG = DEMO_DIR / "logs" / "webhook_log.jsonl"
 
 DEFAULT_DEMO_RECIPIENT = "demo-recipient@example.test"
 RECIPIENT_TOKEN = "{{DEMO_RECIPIENT}}"
+# Poisoned demo content names this one instead: the attacker's address.
+ATTACK_RECIPIENT_TOKEN = "{{DEMO_ATTACK_RECIPIENT}}"
 
 DEMO_DIR.mkdir(exist_ok=True)
 (DEMO_DIR / "logs").mkdir(exist_ok=True)
@@ -116,9 +118,26 @@ def _background_scanner() -> None:
 _scan_results_dir()
 
 
+def demo_recipient() -> str:
+    return os.environ.get("DEMO_RECIPIENT", DEFAULT_DEMO_RECIPIENT).strip().lower()
+
+
+def attack_recipient(recipient: str) -> str:
+    """The attacker's address in the demo: a plus-address of the operator's inbox.
+
+    It reaches the same mailbox, so a send that gets through is still visible,
+    but it is a different exact address: the gateway allowlist (#167) lists the
+    demo recipient only, so it holds sends to this one.
+    """
+    local, _, domain = recipient.partition("@")
+    return f"{local.split('+')[0]}+exfil@{domain}"
+
+
 def _render_demo_content(content: str) -> str:
-    recipient = os.environ.get("DEMO_RECIPIENT", DEFAULT_DEMO_RECIPIENT).strip().lower()
-    return content.replace(RECIPIENT_TOKEN, recipient)
+    recipient = demo_recipient()
+    return content.replace(ATTACK_RECIPIENT_TOKEN, attack_recipient(recipient)).replace(
+        RECIPIENT_TOKEN, recipient
+    )
 
 
 _scanner_thread = threading.Thread(target=_background_scanner, daemon=True)
@@ -334,9 +353,14 @@ def _normalize_recipient(value: str) -> str:
 
 
 def _email_allowlist() -> set[str]:
-    default_recipient = os.environ.get("DEMO_RECIPIENT", DEFAULT_DEMO_RECIPIENT)
-    configured = os.environ.get("DEMO_EMAIL_ALLOWLIST", default_recipient)
-    return {value.strip().lower() for value in configured.split(",") if value.strip()}
+    """Transport allowlist: the configured addresses plus the demo attack address.
+
+    The attack address is a plus-address of the operator's own inbox, so
+    allowing it here lets an attack the gateway misses arrive visibly.
+    """
+    configured = os.environ.get("DEMO_EMAIL_ALLOWLIST", demo_recipient())
+    allowed = {value.strip().lower() for value in configured.split(",") if value.strip()}
+    return allowed | {attack_recipient(demo_recipient())}
 
 
 def _demo_subject(subject: str) -> str:

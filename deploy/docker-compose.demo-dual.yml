@@ -2,10 +2,12 @@
 #
 # Adds a SECOND proxy, litellm-stateless, on :4001 running ROUTER_MODE=stateless,
 # alongside the default session-mode proxy on :4000. Both share the same local
-# DeBERTa classifier sidecar and mock model, so the ONLY difference between them
-# is the routing mode — exactly the variable the demo isolates.
+# DeBERTa classifier sidecar, mock model and policy, so the ONLY difference
+# between them is the routing mode — exactly the variable the demo isolates.
 #
-# Usage (from repo root):
+# Usage (from repo root). Use make: it generates the demo policy first. Raw
+# docker compose needs `python scripts/demo_policy.py` (with deploy/.env loaded)
+# run beforehand.
 #   docker compose --env-file deploy/.env \
 #                  -f deploy/docker-compose.yml \
 #                  -f deploy/docker-compose.classifier.yml \
@@ -14,8 +16,12 @@
 #
 # Or: make demo-dual-up
 #
-#   session proxy    → http://localhost:4000   (catches delayed exfil)
-#   stateless proxy  → http://localhost:4001   (misses delayed exfil)
+#   session proxy    → http://localhost:4000
+#   stateless proxy  → http://localhost:4001
+#
+# Both proxies run deploy/policy.demo.yaml: the bundled policy with the winning
+# switches (classifier + allowlist) and this clone's demo recipient allowed.
+# `make demo-dual-up` generates it (scripts/demo_policy.py).
 #
 # Both proxies use litellm_config.demo.yaml, where the quarantine model group
 # is a local Ollama model (#183): high-risk context never leaves the machine.
@@ -47,6 +53,8 @@ services:
   litellm:
     environment:
       - ROUTER_ROUTE_HEADER=true
+      - POLICY_PATH=/workspace/deploy/policy.demo.yaml
+      - ROUTER_LITELLM_CONFIG=/app/config.yaml
     volumes:
       - ./litellm_config.demo.yaml:/app/config.yaml:ro
     depends_on:
@@ -74,7 +82,7 @@ services:
       - ROUTER_ENFORCE=${ROUTER_ENFORCE:-true}
       - ROUTER_LITELLM_CONFIG=/app/config.yaml
       - ROUTER_ROUTE_HEADER=true
-      - POLICY_PATH=${POLICY_PATH:-/workspace/deploy/policy.yaml}
+      - POLICY_PATH=/workspace/deploy/policy.demo.yaml
     depends_on:
       mock-model:
         condition: service_healthy
