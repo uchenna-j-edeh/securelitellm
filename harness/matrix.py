@@ -31,6 +31,7 @@ from harness.decisions import clear_log
 from harness.runner import TurnResult, load_scenario, replay_scenario
 from router.controls import CONTROLS_ENV, Controls, resolve_controls
 from router.policy import load_policy_document
+from scripts.setup_demo import parse_env
 
 REPO_ROOT = Path(__file__).parent.parent
 COMPOSE_BASE = REPO_ROOT / "deploy" / "docker-compose.yml"
@@ -40,6 +41,7 @@ ENV_FILE = REPO_ROOT / "deploy" / ".env"
 SCENARIOS_DIR = REPO_ROOT / "corpus" / "scenarios"
 RESULTS_DIR = REPO_ROOT / "eval" / "results"
 RESULTS_CSV = RESULTS_DIR / "results.csv"
+CUSTOM_COMPOSE_FILES: list[Path] = []
 
 PROXY_URL = os.getenv("PROXY_URL", "http://localhost:4000")
 HEALTH_URL = f"{PROXY_URL}/health/liveliness"
@@ -49,13 +51,8 @@ def _load_env_file() -> None:
     """Load deploy/.env into os.environ so LITELLM_MASTER_KEY is available for HTTP calls."""
     if not ENV_FILE.exists():
         return
-    for line in ENV_FILE.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        if key not in os.environ:  # don't override shell env
-            os.environ[key] = val
+    for key, value in parse_env(ENV_FILE).items():
+        os.environ.setdefault(key, value)
 
 
 _load_env_file()
@@ -124,6 +121,11 @@ CONDITIONS: list[Controls] = [
 
 
 def _compose_cmd(*args: str) -> list[str]:
+    if CUSTOM_COMPOSE_FILES:
+        cmd = ["docker", "compose"]
+        for path in CUSTOM_COMPOSE_FILES:
+            cmd.extend(["-f", str(path)])
+        return [*cmd, *args]
     cmd = ["docker", "compose", "-f", str(COMPOSE_BASE), "-f", str(COMPOSE_OVERRIDE)]
     # Include the classifier sidecar overlay when running with the local backend.
     if os.environ.get("CLASSIFIER_BACKEND", "none").lower() == "local":
@@ -316,6 +318,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dry-run", action="store_true", help="enumerate only, no proxy")
     parser.add_argument(
+        "--compose-file",
+        type=Path,
+        action="append",
+        default=[],
+        help="use this complete Compose stack instead of the defaults (repeatable)",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=RESULTS_DIR,
+        help="write this run's CSVs into a separate directory",
+    )
+    parser.add_argument(
         "--controls",
         default="",
         help="override the policy's switches, e.g. classifier=off (#196)",
@@ -326,6 +341,12 @@ if __name__ == "__main__":
         help="run every combination of the switches, one results_<switches>.csv each",
     )
     args = parser.parse_args()
+    CUSTOM_COMPOSE_FILES = [path.resolve() for path in args.compose_file]
+    for path in CUSTOM_COMPOSE_FILES:
+        if not path.is_file():
+            parser.error(f"Compose file does not exist: {path}")
+    RESULTS_DIR = args.results_dir.resolve()
+    RESULTS_CSV = RESULTS_DIR / "results.csv"
     if args.conditions:
         run_conditions(n_seeds=args.seeds, dry_run=args.dry_run)
     else:

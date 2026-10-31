@@ -1,5 +1,6 @@
 """Demo agent helpers."""
 
+import httpx
 import pytest
 
 from demo.agent import answered_by, parse_route_header
@@ -39,3 +40,24 @@ def test_answered_by(name, api_base, location):
 
 def test_answered_by_without_model_header():
     assert answered_by(None, "http://ollama:11434") is None
+
+
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        ("tool_use_failed: Failed to call a function", "error"),
+        ("Tool choice is none, but model called a tool", "intercepted"),
+        ("SecureLiteLLM: policy blocked this request", "blocked"),
+    ],
+)
+def test_provider_format_errors_are_not_credited_as_interceptions(monkeypatch, message, expected):
+    from demo import agent
+
+    monkeypatch.setattr(
+        agent.httpx,
+        "post",
+        lambda *a, **kw: httpx.Response(400, json={"error": {"message": message}}),
+    )
+    monkeypatch.setattr(agent, "call_tool", lambda *a, **kw: pytest.fail("No tool should execute"))
+    events = list(agent.run_chat("Read the synthetic fixture", []))
+    assert [event["kind"] for event in events] == [expected]

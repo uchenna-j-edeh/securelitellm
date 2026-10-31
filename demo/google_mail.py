@@ -90,6 +90,20 @@ def _get(path: str, token: str, params: dict[str, Any] | None = None) -> dict:
     return response.json()
 
 
+def validate_token(path: Path, scope: str) -> None:
+    """Validate the current token and its granted scope without sending mail."""
+    token = access_token(path, scope)
+    response = httpx.get(
+        "https://oauth2.googleapis.com/tokeninfo",
+        params={"access_token": token},
+        timeout=TIMEOUT_SECONDS,
+    )
+    if response.status_code != 200:
+        raise GmailError("Gmail token is expired, revoked or invalid; sign in again")
+    if set(response.json().get("scope", "").split()) != {scope}:
+        raise GmailError("Gmail granted scopes differ from the required single permission")
+
+
 def _label_id(token: str, name: str) -> str:
     for label in _get("labels", token).get("labels", []):
         if label.get("name") == name:

@@ -16,7 +16,9 @@ dist/
 # Results / data (keep directory stubs, ignore generated files)
 eval/results/*.csv
 eval/results/*.json
+eval/results/*.jsonl
 eval/results/figures/
+eval/results/*/
 harness/logs/*.jsonl
 
 # IDE

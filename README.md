@@ -15,14 +15,14 @@ See [ROADMAP.md](ROADMAP.md) for the full research design and milestone plan.
 ### Reproduce the live demo
 
 This is the shortest path for a new operator. It uses a real Groq model but keeps email
-entirely on the local machine unless the operator explicitly opts into SMTP:
+entirely on the local machine unless the operator explicitly opts into SMTP or Gmail API delivery:
 
 ```bash
 git clone https://github.com/uchenna-j-edeh/securelitellm.git
 cd securelitellm
 
 # Installs locked Python dependencies, then prompts privately for your Groq key.
-# At "Email mode [log/smtp]", press Enter to keep the safe local-outbox default.
+# At "Email mode [log/smtp/gmail]", press Enter to keep the safe local-outbox default.
 make demo-setup
 make demo-check
 
@@ -549,7 +549,7 @@ CLASSIFIER_BACKEND=local make eval
 See the [corpus scenario authoring guide](corpus/README.md) for the YAML schema,
 `expected_detects` semantics, valid values, and an annotated example.
 
-`make eval` runs `harness/matrix.py` with one seed (624 runs; the mock model answers every seed identically, so more seeds only repeat the same answers — use `--seeds N` with a live model) and then `eval/metrics.py --table --figures`. With the mock model it takes about 10 minutes; `make eval-conditions` runs it for each of the 4 switch settings (about 45 minutes). It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
+`make eval` runs `harness/matrix.py` with one seed (696 runs on the current 58-scenario corpus; the mock model answers every seed identically, so more seeds only repeat the same answers — use `--seeds N` with a live model) and then `eval/metrics.py --table --figures`. The historical 52-scenario run took about 10 minutes; `make eval-conditions` ran each of the 4 switch settings in about 45 minutes total. The expanded 58-scenario matrix has not been timed. It brings the stack down when it finishes, so start the demo again afterwards with `make demo-dual-up`. L0/L1 use only structural features (source/sink co-presence). Stateless-full mode detects delayed-exfil attacks that stateless-incremental misses, because the injected tool result from Turn 1 is visible in the Turn 2 request. L3 session mode blocks via taint-hash matching.
 
 **Combinations of protections (#196).** Each protection is a switch in the policy's `controls:` section, overridable with `ROUTER_CONTROLS`:
 
@@ -560,7 +560,7 @@ See the [corpus scenario authoring guide](corpus/README.md) for the YAML schema,
 
 Session memory is the third switch: `ROUTER_MODE`, which the harness already runs both ways. `make eval-conditions` runs the matrix once per combination of `classifier` × `allowlist`, writing `eval/results/results_classifier-<on|off>_allowlist-<on|off>.csv`, then prints one table across them (`eval/metrics.py --summary`). With memory that covers all 8 combinations. Combinations the router refuses are skipped with a note.
 
-**Which combination to run.** All 8 combinations were measured once on 52 scenarios; the winner is session + classifier + allowlist, which catches 22 of 26 attack turns and flags 5 of 20 benign turns (4 of the 5 are legitimate sends to unlisted destinations). Results, what each layer contributes, and the limitations: [`docs/results/protection-combinations.md`](docs/results/protection-combinations.md).
+**Which combination to run.** The published 2026-10-27 experiment measured all 8 combinations once on 52 scenarios; the winner is session + classifier + allowlist, which catches 22 of 26 attack turns and flags 5 of 20 benign turns (4 of the 5 are legitimate sends to unlisted destinations). Results, what each layer contributes, and the limitations: [`docs/results/protection-combinations.md`](docs/results/protection-combinations.md).
 
 **Destination allowlist (#167).** With `allowlist=on`, every destination in a send must be listed in the policy's `allowed_destinations`, wherever it came from: email to/cc/bcc (lists and display names included), URLs and endpoints, webhooks, Slack channels and message recipients. Entries are an exact address (`alice@example.com`; `@example.com` domain wildcards are rejected, so every allowed inbox has known owners), a URL host (`https://api.partner.com`, matched on the parsed host, so `https://api.partner.com@evil.io/` and `https://api.partner.com.evil.io/` are refused) or a channel (`"#team-reports"`). A send to anything else, or with no destination found, sets `destination_not_allowed`, which the bundled policy scores high: pre-call removes tools, post-call holds the generated call. Sends are tools in the exfil category plus tools of unknown capability; file writes and reads are not checked (#93). Decision records name a refused destination by domain, host or channel only (`unlisted_destinations`), never the full address. The list is validated at startup even when the allowlist is off. Being allowlisted means permitted, not trusted: the classifier and taint checks still apply. Every results row has a `controls` column, and the startup and decision records carry the switches, so each number traces back to the protections that produced it. A single run can also be overridden: `harness/matrix.py --controls classifier=off`. `ROUTER_LOCK=true` rejects `classifier=off`.
 
@@ -718,7 +718,7 @@ Each untrusted tool result is passed in full to the DeBERTa classifier. Session 
 #    and writes only to the Git-ignored deploy/.env with private permissions.
 make demo-setup
 make demo-check
-# Before presenting: authenticate to Groq and optional SMTP without sending email.
+# Before presenting: check Groq and each configured work tool without sending email.
 make demo-check-live
 
 # 2. Start both proxies + classifier sidecar
@@ -815,3 +815,5 @@ See `docs/adr/` for ADR-001 through ADR-007. Key decisions:
 - Threat model: indirect/content-borne injection only; direct user injection out of scope (ADR-005)
 - eBPF backstop parked until M4 review (ADR-006)
 - Four context-richness levels L0–L3 (ADR-007)
+
+The optional work-tool setup now includes Gmail read/send, Jira and GitHub checks, six UI prompts, and deterministic source-to-sink replays. See the [work-channel runbook](demo/DEMO_RUNBOOK.md#work-channel-beats-and-deterministic-fallback-204208). `make eval-live-dry` previews the constrained real-model check; `make eval-live` writes a separate three-seed result, never executing tools. The [complete 58-scenario matrix](docs/results/protection-combinations.md#complete-58-scenario-rerun-2026-10-31) archives 4,032 turn records. The separate [real-account rehearsal](docs/results/work-tools-live.md) records successful Gmail sends and substantial benign read false positives; the [constrained probe](docs/results/protection-combinations.md#real-model-probe-199-part-4) distinguishes gateway prevention from model non-generation.
