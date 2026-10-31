@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from demo.agent import MODEL, run_chat  # noqa: E402
 from demo.tools import TOOL_SERVER_URL  # noqa: E402
+from demo.work_beats import work_beats  # noqa: E402
 from router.session import session_ref  # noqa: E402
 
 DEMO_DIR = Path(__file__).parent
@@ -73,6 +74,7 @@ async def demo_config() -> dict:
         "tool_service": TOOL_SERVER_URL,
         "email_mode": os.environ.get("DEMO_EMAIL_MODE", "log"),
         "demo_recipient": os.environ.get("DEMO_RECIPIENT", "demo-recipient@example.test"),
+        "work_beats": work_beats(),
     }
 
 

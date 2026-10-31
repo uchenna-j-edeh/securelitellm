@@ -1,4 +1,4 @@
-.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay gmail-auth
+.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-live eval-live-dry eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay gmail-auth
 
 # Well-known key used exclusively for E2E tests — never the production key.
 E2E_KEY := sk-test-e2e-key
@@ -66,6 +66,14 @@ eval-conditions:
 eval-dry:
 	$(PYTHON) harness/matrix.py --dry-run
 
+# Constrained real-model validation, separate from the deterministic matrix.
+# No emails or HTTP tools execute. The local DeBERTa sidecar must be running.
+eval-live:
+	$(PYTHON) harness/live.py
+
+eval-live-dry:
+	$(PYTHON) harness/live.py --dry-run
+
 # Local classifier sidecar — DeBERTa prompt-injection model (downloads ~180 MB on first run)
 # Swap model: CLASSIFIER_MODEL=<hf-model-id> make classifier-up
 classifier-up:
@@ -81,13 +89,13 @@ demo-setup:
 		echo "uv is required for first-time setup: https://docs.astral.sh/uv/getting-started/installation/" >&2; \
 		exit 2; \
 	fi
-	python3 scripts/setup_demo.py
+	$(PYTHON) scripts/setup_demo.py
 
 demo-check:
-	python3 scripts/setup_demo.py --check
+	$(PYTHON) scripts/setup_demo.py --check
 
 demo-check-live:
-	python3 scripts/setup_demo.py --check-online
+	$(PYTHON) scripts/setup_demo.py --check-online
 
 demo-tools:
 	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)

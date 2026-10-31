@@ -240,6 +240,13 @@ def test_github_search_is_limited_to_the_repo(fake_github, monkeypatch):
     assert headers["Authorization"] == "Bearer github-token"
 
 
+@pytest.mark.parametrize("query", ["repo:other/private", "login OR (org:other)", "USER:someone"])
+def test_github_search_cannot_expand_the_repository(fake_github, query):
+    result = mcp_server.list_github_issues(GitHubIssuesRequest(query=query))
+    assert "must not override" in result["error"]
+    assert fake_github.calls == []
+
+
 def test_github_issue_returns_body_and_comments_as_text(fake_github):
     result = mcp_server.get_github_issue(GitHubIssueRequest(number=3))
 

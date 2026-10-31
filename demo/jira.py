@@ -62,6 +62,16 @@ def _jql_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def check_project() -> None:
+    """Check the configured project, including an empty project, without writes."""
+    base, auth, project = _config()
+    from urllib.parse import quote
+
+    result = _get(f"{base}/rest/api/3/project/{quote(project, safe='')}", auth)
+    if result.get("key", "").upper() != project:
+        raise JiraError("Jira returned a different project")
+
+
 def adf_text(node: Any) -> str:
     """Plain text from an Atlassian Document Format tree (Jira's rich-text JSON)."""
     if isinstance(node, str):

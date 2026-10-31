@@ -70,11 +70,21 @@ def _summary(issue: dict) -> dict[str, Any]:
     }
 
 
+def check_repository() -> None:
+    """Check repository access, including a repository with no issues."""
+    repo = _repo()
+    result = _get(f"repos/{repo}")
+    if result.get("full_name", "").lower() != repo.lower() or not result.get("has_issues"):
+        raise GitHubIssuesError("The configured repository must be accessible with Issues enabled")
+
+
 def list_issues(query: str = "", state: str = "open", max_results: int = 10) -> list[dict]:
     """Issues in the demo repository, most recently updated first; optional text search."""
     repo = _repo()
     if state not in {"open", "closed", "all"}:
         raise GitHubIssuesError("state must be open, closed or all")
+    if re.search(r"\b(?:repo|org|user)\s*:", query, flags=re.IGNORECASE):
+        raise GitHubIssuesError("query must not override the configured repository")
     # Search, not the list endpoint: that one mixes in pull requests, which would
     # use up the page before they could be dropped.
     qualifiers = f"repo:{repo} is:issue" + ("" if state == "all" else f" is:{state}")
