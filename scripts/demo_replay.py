@@ -14,6 +14,7 @@ Run it with deploy/.env loaded (the make target does) and the demo stack up.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -26,8 +27,16 @@ sys.path.insert(0, str(REPO_ROOT))
 from harness import runner  # noqa: E402
 
 PROXIES = (
-    ("stateless", "http://localhost:4001", "deploy-litellm-stateless-1"),
-    ("session", "http://localhost:4000", "deploy-litellm-1"),
+    (
+        "stateless",
+        os.getenv("PROXY_URL_STATELESS", "http://localhost:4001"),
+        os.getenv("CONTAINER_STATELESS", "deploy-litellm-stateless-1"),
+    ),
+    (
+        "session",
+        os.getenv("PROXY_URL_SESSION", "http://localhost:4000"),
+        os.getenv("CONTAINER_SESSION", "deploy-litellm-1"),
+    ),
 )
 
 
@@ -81,11 +90,13 @@ def replay(scenario_id: str) -> int:
     print(f"{scenario.id} ({scenario.label}): {scenario.description.strip()}\n")
     runner.DEFAULT_MODEL = "mock"  # scripted replies; the demo config routes it to the mock
     runner.current_log_size = lambda: datetime.now(timezone.utc)
+    failed = False
     for mode, url, container in PROXIES:
         runner.PROXY_URL = url
         runner.wait_for_decision = _docker_wait(container)
         print(f"== {mode} ({url})")
         for turn in runner.replay_scenario(scenario):
+            failed |= not turn.proxy_ok or turn.action == "unknown"
             marker = "attack turn" if turn.is_attack_turn else "setup turn"
             line = f"  {turn.turn_name:<36} {marker:<12} {turn.action:<12} risk={turn.risk_level or '-'}"
             if turn.matched_rules:
@@ -94,7 +105,7 @@ def replay(scenario_id: str) -> int:
                 line += f" -> generated call {turn.outcome}"
             print(line)
         print()
-    return 0
+    return int(failed)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ Configured from deploy/.env:
     JIRA_EMAIL         the Atlassian account the API token belongs to
     JIRA_API_TOKEN     an API token for that account
     JIRA_PROJECT_KEY   the one project the agent may read, e.g. DEMO
+    JIRA_CLOUD_ID      site UUID, required for API tokens with scopes
 
 Every search is limited to that project, and a ticket outside it is refused,
 so the agent sees only what the operator put there. The tool only reads; use
@@ -42,6 +43,11 @@ def _config() -> tuple[str, tuple[str, str], str]:
         )
     if not base.startswith("https://"):
         raise JiraError("JIRA_BASE_URL must be an https:// URL")
+    cloud_id = os.environ.get("JIRA_CLOUD_ID", "").strip()
+    if cloud_id:
+        if not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", cloud_id):
+            raise JiraError("JIRA_CLOUD_ID must be a site UUID")
+        base = f"https://api.atlassian.com/ex/jira/{cloud_id}"
     return base, (email, token), project
 
 
@@ -60,6 +66,16 @@ def _get(url: str, auth: tuple[str, str], params: dict | None = None) -> dict:
 
 def _jql_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def check_project() -> None:
+    """Check the configured project, including an empty project, without writes."""
+    base, auth, project = _config()
+    from urllib.parse import quote
+
+    result = _get(f"{base}/rest/api/3/project/{quote(project, safe='')}", auth)
+    if result.get("key", "").upper() != project:
+        raise JiraError("Jira returned a different project")
 
 
 def adf_text(node: Any) -> str:

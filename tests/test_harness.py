@@ -229,6 +229,25 @@ def test_matrix_dry_run(tmp_path, monkeypatch):
     assert results.read_text() == "mode,level\nsession,L3\n"  # left untouched
 
 
+@pytest.mark.parametrize("name, path_attribute", [("runner", "_ENV_FILE"), ("matrix", "ENV_FILE")])
+def test_harness_loads_quoted_setup_values_without_overriding_the_caller(
+    monkeypatch, tmp_path, name, path_attribute
+):
+    import importlib
+    import os
+
+    module = importlib.import_module(f"harness.{name}")
+    path = tmp_path / ".env"
+    path.write_text("DEMO_TEST_NOTE='[SecureLiteLLM DEMO]'\n")
+    monkeypatch.setattr(module, path_attribute, path)
+    monkeypatch.delenv("DEMO_TEST_NOTE", raising=False)
+    module._load_env_file()
+    assert os.environ["DEMO_TEST_NOTE"] == "[SecureLiteLLM DEMO]"
+    monkeypatch.setenv("DEMO_TEST_NOTE", "caller value")
+    module._load_env_file()
+    assert os.environ["DEMO_TEST_NOTE"] == "caller value"
+
+
 # ── corpus-schema round-trip ──────────────────────────────────────────────────
 
 SCENARIOS_DIR = Path(__file__).parent.parent / "corpus" / "scenarios"

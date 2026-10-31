@@ -23,10 +23,14 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from email.utils import parseaddr
 from pathlib import Path
+from urllib.parse import urlparse
 
 DEFAULT_OUTPUT = Path("deploy/.env")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 DEFAULT_DEMO_RECIPIENT = "demo-recipient@example.test"
 DEFAULT_SMTP_HOST = "smtp.gmail.com"
 DEFAULT_SMTP_PORT = 587
@@ -36,6 +40,147 @@ REQUIRED_GROQ_MODEL = "openai/gpt-oss-120b"
 
 class SetupError(RuntimeError):
     """A safe, user-facing setup failure."""
+
+
+def _validate_work_settings(values: dict[str, str]) -> None:
+    jira_keys = ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY")
+    if any(values.get(key) for key in (*jira_keys, "JIRA_CLOUD_ID")):
+        if not all(values.get(key) for key in jira_keys):
+            raise SetupError(
+                "Jira needs JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN and JIRA_PROJECT_KEY."
+            )
+        url = urlparse(values["JIRA_BASE_URL"])
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path not in {"", "/"}
+        ):
+            raise SetupError("JIRA_BASE_URL must be an HTTPS site origin without credentials.")
+        _email_address(values["JIRA_EMAIL"], field="JIRA_EMAIL")
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", values["JIRA_PROJECT_KEY"]):
+            raise SetupError("JIRA_PROJECT_KEY must be a Jira project key, e.g. DEMO.")
+        cloud_id = values.get("JIRA_CLOUD_ID", "")
+        if cloud_id and not re.fullmatch(
+            r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", cloud_id
+        ):
+            raise SetupError("JIRA_CLOUD_ID must be a site UUID.")
+    repo = values.get("GITHUB_ISSUES_REPO", "")
+    if repo and not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", repo):
+        raise SetupError("GITHUB_ISSUES_REPO must be owner/name.")
+    if values.get("GITHUB_ISSUES_TOKEN") and not repo:
+        raise SetupError("GITHUB_ISSUES_TOKEN needs GITHUB_ISSUES_REPO.")
+    if values.get("DEMO_GMAIL_READ_ENABLED", "false").lower() not in {"true", "false"}:
+        raise SetupError("DEMO_GMAIL_READ_ENABLED must be true or false.")
+    if (
+        values.get("DEMO_GMAIL_READ_ENABLED", "false").lower() == "true"
+        and not values.get("DEMO_GMAIL_LABEL", "securelitellm-demo").strip()
+    ):
+        raise SetupError("DEMO_GMAIL_LABEL cannot be empty when Gmail reads are enabled.")
+
+
+@contextmanager
+def _work_environment(values: dict[str, str]):
+    """CLI-only temporary environment, restored even if a provider fails."""
+    prefixes = ("DEMO_GMAIL_", "JIRA_", "GITHUB_ISSUES_")
+    keys = {key for key in os.environ if key.startswith(prefixes)} | {
+        key for key in values if key.startswith(prefixes)
+    }
+    previous = {key: os.environ.get(key) for key in keys}
+    try:
+        for key in keys:
+            os.environ.pop(key, None)
+        os.environ.update({key: values[key] for key in keys if key in values})
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def check_work_tools(
+    values: dict[str, str], *, online: bool, base: Path | None = None
+) -> list[str]:
+    """Check only configured services; online checks never send a message."""
+    _validate_work_settings(values)
+    base = base or REPO_ROOT / "deploy"
+    checks = []
+    read_path = Path(values.get("DEMO_GMAIL_READ_TOKEN") or base / "gmail_read_token.json")
+    send_path = Path(values.get("DEMO_GMAIL_SEND_TOKEN") or base / "gmail_send_token.json")
+    read_enabled = (
+        values.get("DEMO_GMAIL_READ_ENABLED", "false").lower() == "true" or read_path.exists()
+    )
+    send_enabled = values.get("DEMO_EMAIL_MODE", "log").lower() == "gmail"
+    for enabled, path, kind in [
+        (read_enabled, read_path, "read"),
+        (send_enabled, send_path, "send"),
+    ]:
+        if not enabled:
+            continue
+        scope = f"https://www.googleapis.com/auth/gmail.{'readonly' if kind == 'read' else 'send'}"
+        try:
+            token = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            raise SetupError(
+                f"Gmail {kind} token is missing or invalid; run make gmail-auth SCOPE={kind}."
+            ) from exc
+        scopes = token.get("scopes", []) if isinstance(token, dict) else []
+        if isinstance(scopes, str):
+            scopes = scopes.split()
+        if (
+            not isinstance(scopes, list)
+            or any(not isinstance(item, str) for item in scopes)
+            or set(scopes) != {scope}
+        ):
+            raise SetupError(f"Gmail {kind} token must grant only {scope}.")
+        if os.name == "posix" and stat.S_IMODE(path.stat().st_mode) & 0o077:
+            raise SetupError(f"Gmail {kind} token must be private: chmod 600 {path}")
+        checks.append(f"Gmail {kind} single-permission token")
+    if values.get("JIRA_BASE_URL"):
+        checks.append("single Jira project configuration")
+    if values.get("GITHUB_ISSUES_REPO"):
+        checks.append("single GitHub repository configuration")
+    if not online:
+        return checks
+
+    from demo import github_issues, google_mail, jira
+
+    configured = {
+        **values,
+        "DEMO_GMAIL_READ_TOKEN": str(read_path),
+        "DEMO_GMAIL_SEND_TOKEN": str(send_path),
+    }
+    service = "Configured work tool"
+    try:
+        with _work_environment(configured):
+            if read_enabled:
+                service = "Gmail read access"
+                google_mail.validate_token(read_path, google_mail.READ_SCOPE)
+                google_mail.list_messages(max_results=1)
+                checks.append("live Gmail read access and demo label")
+            if send_enabled:
+                service = "Gmail send authorization"
+                google_mail.validate_token(send_path, google_mail.SEND_SCOPE)
+                checks.append("live Gmail send token (no email sent)")
+            if values.get("JIRA_BASE_URL"):
+                service = "Jira project access"
+                jira.check_project()
+                checks.append("live Jira project access")
+            if values.get("GITHUB_ISSUES_REPO"):
+                service = "GitHub repository access"
+                github_issues.check_repository()
+                checks.append("live GitHub repository access")
+    except Exception as exc:
+        # Provider exceptions may contain credentials or response bodies.
+        raise SetupError(
+            f"{service} check failed; verify its sign-in, scope and selected label/project/repository."
+        ) from exc
+    return checks
 
 
 def _dotenv_value(value: str) -> str:
@@ -73,12 +218,21 @@ def render_config(
     smtp_username: str = "",
     smtp_password: str = "",
     smtp_from: str = "",
+    gmail_read: bool = False,
+    gmail_label: str = "securelitellm-demo",
+    jira_base_url: str = "",
+    jira_email: str = "",
+    jira_api_token: str = "",
+    jira_project_key: str = "",
+    jira_cloud_id: str = "",
+    github_repo: str = "",
+    github_token: str = "",
 ) -> str:
     """Return a minimal demo configuration without exposing secrets elsewhere."""
     if not re.fullmatch(r"gsk_[A-Za-z0-9_-]{20,}", groq_key):
         raise SetupError("The Groq key does not look like a current gsk_ API key.")
-    if email_mode not in {"log", "smtp"}:
-        raise SetupError("Email mode must be 'log' or 'smtp'.")
+    if email_mode not in {"log", "smtp", "gmail"}:
+        raise SetupError("Email mode must be log, smtp or gmail.")
     recipient = _email_address(demo_recipient, field="Demo recipient")
 
     if email_mode == "smtp":
@@ -115,7 +269,17 @@ def render_config(
         "SMTP_USERNAME": smtp_username.strip(),
         "SMTP_PASSWORD": smtp_password,
         "SMTP_FROM": from_address,
+        "DEMO_GMAIL_READ_ENABLED": str(gmail_read).lower(),
+        "DEMO_GMAIL_LABEL": gmail_label.strip(),
+        "JIRA_BASE_URL": jira_base_url.strip().rstrip("/"),
+        "JIRA_EMAIL": jira_email.strip(),
+        "JIRA_API_TOKEN": jira_api_token,
+        "JIRA_PROJECT_KEY": jira_project_key.strip().upper(),
+        "JIRA_CLOUD_ID": jira_cloud_id.strip(),
+        "GITHUB_ISSUES_REPO": github_repo.strip(),
+        "GITHUB_ISSUES_TOKEN": github_token,
     }
+    _validate_work_settings(values)
     lines = [
         "# Generated by scripts/setup_demo.py. Contains secrets; never commit or share.",
         "# Use your own provider credentials; never copy another person's deploy/.env.",
@@ -213,8 +377,8 @@ def check_config(path: Path) -> list[str]:
         raise SetupError("GROQ_API_KEY does not look like a current Groq API key.")
 
     mode = values["DEMO_EMAIL_MODE"].lower()
-    if mode not in {"log", "smtp"}:
-        raise SetupError("DEMO_EMAIL_MODE must be 'log' or 'smtp'.")
+    if mode not in {"log", "smtp", "gmail"}:
+        raise SetupError("DEMO_EMAIL_MODE must be log, smtp or gmail.")
     recipient = _email_address(values["DEMO_RECIPIENT"], field="DEMO_RECIPIENT")
     configured = {
         item.strip().lower() for item in values["DEMO_EMAIL_ALLOWLIST"].split(",") if item.strip()
@@ -235,8 +399,11 @@ def check_config(path: Path) -> list[str]:
         if not 1 <= port <= 65535:
             raise SetupError("SMTP_PORT must be between 1 and 65535.")
         checks.extend(["SMTP credential presence", "single-recipient allowlist"])
+    elif mode == "gmail":
+        checks.append("Gmail send-only mode")
     else:
         checks.append("safe local-only outbox mode")
+    checks.extend(check_work_tools(values, online=False, base=path.parent))
     return checks
 
 
@@ -368,6 +535,7 @@ def check_online(path: Path) -> list[str]:
             password=values["SMTP_PASSWORD"],
         )
         checks.append("live SMTP login (no email sent)")
+    checks.extend(check_work_tools(values, online=True, base=path.parent))
     return checks
 
 
@@ -379,9 +547,9 @@ def _prompt_secret(prompt: str) -> str:
 
 
 def _prompt_email_mode() -> str:
-    answer = input("Email mode [log/smtp] (default: log): ").strip().lower() or "log"
-    if answer not in {"log", "smtp"}:
-        raise SetupError("Enter either 'log' or 'smtp'.")
+    answer = input("Email mode [log/smtp/gmail] (default: log): ").strip().lower() or "log"
+    if answer not in {"log", "smtp", "gmail"}:
+        raise SetupError("Enter log, smtp or gmail.")
     return answer
 
 
@@ -436,11 +604,32 @@ def configure(path: Path, *, force: bool, skip_validation: bool) -> None:
         smtp_password = _prompt_secret("SMTP password or app password: ")
         smtp_from = _prompt_value("From email", default=smtp_username)
         demo_recipient = _prompt_value("Demo recipient email", default=smtp_from)
+    elif email_mode == "gmail":
+        demo_recipient = _prompt_value("Demo recipient email")
+        print("Gmail needs a separate send-only token: make gmail-auth SCOPE=send")
     else:
         print(
             f"Using local-only outbox with synthetic recipient {DEFAULT_DEMO_RECIPIENT}. "
             "No email will leave this computer."
         )
+
+    work = {}
+    work["gmail_read"] = _prompt_yes_no("Enable demo Gmail inbox reads", default=False)
+    if work["gmail_read"]:
+        work["gmail_label"] = _prompt_value("Gmail demo label", default="securelitellm-demo")
+        print("Sign in with the read-only token: make gmail-auth SCOPE=read")
+    if _prompt_yes_no("Enable Jira demo project", default=False):
+        work["jira_base_url"] = _prompt_value("Jira HTTPS site URL")
+        work["jira_email"] = _prompt_value("Jira account email")
+        work["jira_api_token"] = _prompt_secret("Jira API token: ")
+        work["jira_project_key"] = _prompt_value("Jira project key")
+        work["jira_cloud_id"] = input(
+            "Jira cloud ID (required for scoped tokens; blank for legacy tokens): "
+        ).strip()
+    if _prompt_yes_no("Enable GitHub demo issues", default=False):
+        work["github_repo"] = _prompt_value("GitHub demo repository (owner/name)")
+        if _prompt_yes_no("Use a read-only GitHub token", default=False):
+            work["github_token"] = _prompt_secret("GitHub read-only Issues token: ")
 
     if not skip_validation:
         print("Validating Groq access (no model inference is performed)...")
@@ -465,12 +654,13 @@ def configure(path: Path, *, force: bool, skip_validation: bool) -> None:
         smtp_username=smtp_username,
         smtp_password=smtp_password,
         smtp_from=smtp_from,
+        **work,
     )
     write_private_file(path, contents, force=force)
-    checks = check_config(path)
+    checks = ["private configuration written"]
     print(f"Created private demo configuration: {path.resolve()}")
     print(f"Checks passed: {', '.join(checks)}")
-    print("Next: make demo-dual-up")
+    print("Next: authorize enabled Gmail tokens, then make demo-check-live and make demo-dual-up")
 
 
 def build_parser() -> argparse.ArgumentParser:

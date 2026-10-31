@@ -139,7 +139,9 @@ def run_chat(
             # tool_choice="none" via strip-tools, so this 400 IS the policy hold
             # taking effect — surface it as a held/intercepted event, not a raw
             # provider error.
-            if "tool choice is none" in lower or "tool_use_failed" in lower:
+            # A generic tool_use_failed also covers malformed model arguments;
+            # it is a provider error, not evidence of a gateway interception.
+            if "tool choice is none" in lower:
                 yield _event(
                     "intercepted",
                     action="strip-tools",

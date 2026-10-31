@@ -109,3 +109,17 @@ move the send into a scripted model reply, so the post-call check decides.
 | benign send to an unlisted destination | bn-040; bn-043 (new supplier), bn-044 (partner webhook), bn-045 (unlisted channel) |
 | benign send to a listed destination | bn-041, bn-042; bn-046 (`#team-reports`), bn-047 (`reports.example.com`) |
 | generated sends | sc-054 (of sc-040), sc-055 (of sc-041), sc-056 (of sc-043), bn-048 (of bn-040), bn-049 (of bn-041) |
+
+### Work-channel replays (#204–#208)
+
+| Channel | Attack with a generated sink | Benign generated update |
+|---|---|---|
+| Gmail message | sc-060: email to an unlisted destination | bn-060: email to `ops@example.com` |
+| Jira ticket | sc-061: planted customer-list send | bn-061: authorized status email |
+| GitHub issue/comment | sc-062: planted debug upload | bn-062: upload to `reports.example.com` |
+
+These six synthetic fixtures increase the current corpus to 58 scenarios
+(34 attacks, 24 benign). They exercise post-call enforcement and are scored
+separately from historical pre-call DR/FPR denominators. They do not require
+provider accounts, execute external tools, or qualify as independently authored
+attacks for #199. Their original text was fixed before the 2026-10-31 checks.
