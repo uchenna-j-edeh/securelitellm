@@ -1,0 +1,32 @@
+--- eval/classifier_reliability.py
++++ eval/classifier_reliability.py
+@@ -179,2 +178,0 @@
+-        if not math.isfinite(request_interval) or request_interval < 0:
+-            raise ValueError("request interval must be finite and nonnegative")
+@@ -322,17 +320,9 @@
+-        configuration = dict(
+-            corpus_sha256=digest(args.corpus.read_bytes()),
+-            backend=args.backend,
+-            model=args.model,
+-            strategies=strategies,
+-        )
+-        if args.backend == "local":
+-            configuration.update(
+-                revision=args.revision, max_length=args.max_length, stride=args.stride
+-            )
+-        else:
+-            configuration.update(
+-                endpoint=args.url,
+-                judge_prompt=JUDGE_PROMPT if args.backend == "judge" else None,
+-                temperature=0 if args.backend == "judge" else None,
+-            )
+-        if any(header.get(k) != value for k, value in configuration.items()):
++        if any(
++            header.get(k) != value
++            for k, value in dict(
++                corpus_sha256=digest(args.corpus.read_bytes()),
++                backend=args.backend,
++                model=args.model,
++                strategies=strategies,
++            ).items()
++        ):
