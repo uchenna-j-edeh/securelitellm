@@ -1,0 +1,41 @@
+# Standalone deterministic evaluation stack. Keeps the regular demo stack up.
+# Reuses its running DeBERTa classifier via host.docker.internal:8080.
+# Use a unique COMPOSE_PROJECT_NAME, PROXY_URL=http://localhost:14000,
+# CLASSIFIER_BACKEND=local, and LOCAL_CLASSIFIER_URL as below.
+# No provider or mailbox credentials are passed to these containers.
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
+    ports:
+      - "127.0.0.1:14000:4000"
+    volumes:
+      - ../deploy/litellm_config.yaml:/app/config.yaml:ro
+      - ../router:/workspace/router:ro
+      - ../deploy/policy.yaml:/workspace/deploy/policy.yaml:ro
+      - ./logs:/logs
+    command: --config /app/config.yaml --port 4000
+    environment:
+      LITELLM_MASTER_KEY: sk-isolated-eval-only
+      GROQ_API_KEY: unused-isolated-mock-evaluation
+      PYTHONPATH: /workspace
+      ROUTER_MODE: ${ROUTER_MODE:-session}
+      ROUTER_LEVEL: ${ROUTER_LEVEL:-L3}
+      ROUTER_ENFORCE: "true"
+      ROUTER_LOG_PATH: /logs/decisions.jsonl
+      CLASSIFIER_BACKEND: local
+      LOCAL_CLASSIFIER_URL: http://host.docker.internal:8080
+      ROUTER_CONTROLS: ${ROUTER_CONTROLS:-}
+      ROUTER_LITELLM_CONFIG: /app/config.yaml
+      POLICY_PATH: /workspace/deploy/policy.yaml
+    depends_on:
+      mock-model:
+        condition: service_healthy
+  mock-model:
+    build:
+      context: ../deploy/mock_model
+    image: securelitellm-eval-mock-model
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
