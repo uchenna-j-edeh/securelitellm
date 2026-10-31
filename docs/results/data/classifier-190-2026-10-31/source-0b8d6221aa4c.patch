@@ -1,0 +1,132 @@
+--- eval/classifier_reliability.py
++++ eval/classifier_reliability.py
+@@ -130,12 +130,4 @@
+-        # Use the tokenizer's overflow API: it adds model-specific special tokens
+-        # without decode/re-encode changes and keeps every overlapping window.
+-        encoded = self.tokenizer(
+-            text,
+-            truncation=True,
+-            max_length=self.max_length,
+-            stride=self.width - self.stride if chunks else 0,
+-            return_overflowing_tokens=chunks,
+-            return_special_tokens_mask=True,
+-            padding=True,
+-            return_tensors="pt",
+-        )
++        starts = [0]
++        if chunks:
++            while starts[-1] + self.width < len(tokens):
++                starts.append(starts[-1] + self.stride)
+@@ -143 +134,0 @@
+-        ranges = []
+@@ -145,14 +136,4 @@
+-        for index in range(encoded["input_ids"].shape[0]):
+-            start = index * self.stride if chunks else 0
+-            end = min(start + self.width, len(tokens))
+-            actual = encoded["input_ids"][index][
+-                encoded["special_tokens_mask"][index] == 0
+-            ].tolist()
+-            if actual != tokens[start:end]:
+-                raise ValueError("tokenizer window differs from full input slice")
+-            ranges.append([start, end])
+-            inputs = {
+-                key: value[index : index + 1]
+-                for key, value in encoded.items()
+-                if key in self.tokenizer.model_input_names
+-            }
++        for start in starts:
++            inputs = self.tokenizer.prepare_for_model(
++                tokens[start : start + self.width], return_tensors="pt", truncation=False
++            )
+@@ -169 +149,0 @@
+-            window_token_ranges=ranges,
+@@ -176 +156 @@
+-    def __init__(self, backend, model, url, api_key_env, request_interval=0):
++    def __init__(self, backend, model, url, api_key_env):
+@@ -179,2 +158,0 @@
+-        if not math.isfinite(request_interval) or request_interval < 0:
+-            raise ValueError("request interval must be finite and nonnegative")
+@@ -185,2 +162,0 @@
+-        self.request_interval = request_interval
+-        self.last_request = 0
+@@ -211,2 +186,0 @@
+-            time.sleep(max(0, self.last_request + self.request_interval - time.monotonic()))
+-            self.last_request = time.monotonic()
+@@ -316,40 +289,0 @@
+-    previous = {}
+-    parent_digest = None
+-    retry_from = getattr(args, "retry_from", None)
+-    if retry_from:
+-        prior = [json.loads(line) for line in retry_from.read_text().splitlines()]
+-        header = prior[0]
+-        configuration = dict(
+-            corpus_sha256=digest(args.corpus.read_bytes()),
+-            backend=args.backend,
+-            model=args.model,
+-            strategies=strategies,
+-        )
+-        if args.backend == "local":
+-            configuration.update(
+-                revision=args.revision, max_length=args.max_length, stride=args.stride
+-            )
+-        else:
+-            configuration.update(
+-                endpoint=args.url,
+-                judge_prompt=JUDGE_PROMPT if args.backend == "judge" else None,
+-                temperature=0 if args.backend == "judge" else None,
+-            )
+-        if any(header.get(k) != value for k, value in configuration.items()):
+-            raise ValueError("retry input does not match this experiment")
+-        for row in prior[1:]:
+-            key = (row["id"], row["strategy"])
+-            if key in previous:
+-                raise ValueError("duplicate retry observation")
+-            previous[key] = row
+-        if set(previous) != {(p["id"], s) for p in probes for s in strategies}:
+-            raise ValueError("incomplete retry input")
+-        for probe in probes:
+-            for strategy in strategies:
+-                row = previous[probe["id"], strategy]
+-                if (
+-                    row["input_sha256"] != digest(transform(probe, strategy).encode())
+-                    or row["expected"] != probe["label"]
+-                ):
+-                    raise ValueError("retry observation differs from frozen input")
+-        parent_digest = digest(retry_from.read_bytes())
+@@ -359,7 +293 @@
+-        else HostedScorer(
+-            args.backend,
+-            args.model,
+-            args.url,
+-            args.api_key_env,
+-            getattr(args, "request_interval", 0),
+-        )
++        else HostedScorer(args.backend, args.model, args.url, args.api_key_env)
+@@ -380,2 +307,0 @@
+-        retry_parent_sha256=parent_digest,
+-        request_interval=getattr(args, "request_interval", 0),
+@@ -393,12 +318,0 @@
+-                old = previous.get((probe["id"], strategy))
+-                reuse = (
+-                    old is not None
+-                    and old.get("http_status") not in (429, 502, 503)
+-                    and old.get("error") not in ("ReadTimeout", "ConnectTimeout", "ConnectError")
+-                )
+-                if reuse:
+-                    row = dict(old, reused=True)
+-                    rows.append(row)
+-                    output.write(json.dumps(row, sort_keys=True) + "\n")
+-                    output.flush()
+-                    continue
+@@ -450,11 +363,0 @@
+-    parser.add_argument(
+-        "--retry-from",
+-        type=Path,
+-        help="Reuse successes; retry transient errors into a NEW output file",
+-    )
+-    parser.add_argument(
+-        "--request-interval",
+-        type=float,
+-        default=0,
+-        help="Minimum seconds between hosted requests (including retries)",
+-    )
