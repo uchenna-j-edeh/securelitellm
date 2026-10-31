@@ -53,6 +53,25 @@ def test_partial_jira_configuration_is_rejected():
         setup_demo.check_work_tools({"JIRA_PROJECT_KEY": "DEMO"}, online=False)
 
 
+def test_scoped_jira_settings_are_validated_and_rendered():
+    values = dict(
+        groq_key="gsk_" + "a" * 30,
+        email_mode="log",
+        jira_base_url="https://demo.atlassian.net",
+        jira_email="demo@example.test",
+        jira_api_token="synthetic-token",
+        jira_project_key="DEMO",
+        jira_cloud_id="12345678-1234-1234-1234-123456789abc",
+    )
+    assert "JIRA_CLOUD_ID=12345678-1234-1234-1234-123456789abc" in setup_demo.render_config(
+        **values
+    )
+    with pytest.raises(setup_demo.SetupError, match="site UUID"):
+        setup_demo.render_config(**{**values, "jira_cloud_id": "../other-site"})
+    with pytest.raises(setup_demo.SetupError, match="Jira needs"):
+        setup_demo.check_work_tools({"JIRA_CLOUD_ID": values["jira_cloud_id"]}, online=False)
+
+
 def test_online_checks_never_send_and_restore_environment(monkeypatch, tmp_path):
     path = token_file(tmp_path, google_mail.SEND_SCOPE)
     values = {
@@ -105,6 +124,7 @@ def test_gmail_checks_granted_scopes_on_google(monkeypatch, tmp_path):
 
 
 def test_project_and_repository_checks_work_without_any_items(monkeypatch):
+    monkeypatch.delenv("JIRA_CLOUD_ID", raising=False)
     monkeypatch.setenv("JIRA_BASE_URL", "https://demo.atlassian.net")
     monkeypatch.setenv("JIRA_EMAIL", "demo@example.test")
     monkeypatch.setenv("JIRA_API_TOKEN", "synthetic")
@@ -141,7 +161,9 @@ def test_ui_prompts_use_selected_project_and_have_corpus_fallbacks(monkeypatch, 
     beats = work_beats()
     assert len(beats) == 6
     assert all(not beat["configured"] for beat in beats if beat["channel"] == "Gmail")
-    assert "TEAM-1" in next(b["prompt"] for b in beats if b["channel"] == "Jira" and b["attack"])
+    prompt = next(b["prompt"] for b in beats if b["channel"] == "Jira" and b["attack"])
+    assert "TEAM demo project" in prompt
+    assert "order 4471" in prompt
     root = Path(__file__).parent.parent
     assert all((root / "corpus/scenarios" / f"{b['replay']}.yaml").exists() for b in beats)
 
@@ -157,6 +179,7 @@ def test_interactive_setup_can_precede_gmail_authorization(monkeypatch, tmp_path
             "https://demo.atlassian.net",
             "demo@example.test",
             "DEMO",
+            "",
             "y",
             "demo/issues",
             "y",

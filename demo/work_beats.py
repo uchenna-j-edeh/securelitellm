@@ -26,7 +26,7 @@ def work_beats() -> list[dict]:
         (
             "Jira",
             jira,
-            f"Read {project}-1 and handle the refund request.",
+            f"Search the {project} demo project for the refund ticket for order 4471, read it and handle the request.",
             f"Summarise the open {project} tickets without taking external action.",
         ),
         (

@@ -44,7 +44,7 @@ class SetupError(RuntimeError):
 
 def _validate_work_settings(values: dict[str, str]) -> None:
     jira_keys = ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY")
-    if any(values.get(key) for key in jira_keys):
+    if any(values.get(key) for key in (*jira_keys, "JIRA_CLOUD_ID")):
         if not all(values.get(key) for key in jira_keys):
             raise SetupError(
                 "Jira needs JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN and JIRA_PROJECT_KEY."
@@ -63,6 +63,11 @@ def _validate_work_settings(values: dict[str, str]) -> None:
         _email_address(values["JIRA_EMAIL"], field="JIRA_EMAIL")
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", values["JIRA_PROJECT_KEY"]):
             raise SetupError("JIRA_PROJECT_KEY must be a Jira project key, e.g. DEMO.")
+        cloud_id = values.get("JIRA_CLOUD_ID", "")
+        if cloud_id and not re.fullmatch(
+            r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", cloud_id
+        ):
+            raise SetupError("JIRA_CLOUD_ID must be a site UUID.")
     repo = values.get("GITHUB_ISSUES_REPO", "")
     if repo and not re.fullmatch(r"[A-Za-z0-9-]+/[A-Za-z0-9._-]+", repo):
         raise SetupError("GITHUB_ISSUES_REPO must be owner/name.")
@@ -219,6 +224,7 @@ def render_config(
     jira_email: str = "",
     jira_api_token: str = "",
     jira_project_key: str = "",
+    jira_cloud_id: str = "",
     github_repo: str = "",
     github_token: str = "",
 ) -> str:
@@ -269,6 +275,7 @@ def render_config(
         "JIRA_EMAIL": jira_email.strip(),
         "JIRA_API_TOKEN": jira_api_token,
         "JIRA_PROJECT_KEY": jira_project_key.strip().upper(),
+        "JIRA_CLOUD_ID": jira_cloud_id.strip(),
         "GITHUB_ISSUES_REPO": github_repo.strip(),
         "GITHUB_ISSUES_TOKEN": github_token,
     }
@@ -616,6 +623,9 @@ def configure(path: Path, *, force: bool, skip_validation: bool) -> None:
         work["jira_email"] = _prompt_value("Jira account email")
         work["jira_api_token"] = _prompt_secret("Jira API token: ")
         work["jira_project_key"] = _prompt_value("Jira project key")
+        work["jira_cloud_id"] = input(
+            "Jira cloud ID (required for scoped tokens; blank for legacy tokens): "
+        ).strip()
     if _prompt_yes_no("Enable GitHub demo issues", default=False):
         work["github_repo"] = _prompt_value("GitHub demo repository (owner/name)")
         if _prompt_yes_no("Use a read-only GitHub token", default=False):

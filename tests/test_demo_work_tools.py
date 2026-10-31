@@ -84,6 +84,7 @@ class _FakeJira:
 
 @pytest.fixture
 def fake_jira(monkeypatch):
+    monkeypatch.delenv("JIRA_CLOUD_ID", raising=False)
     monkeypatch.setenv("JIRA_BASE_URL", JIRA + "/")
     monkeypatch.setenv("JIRA_EMAIL", "agent@example.test")
     monkeypatch.setenv("JIRA_API_TOKEN", "api-token")
@@ -112,6 +113,38 @@ def test_jira_search_is_limited_to_the_project(fake_jira):
     assert params["jql"] == 'project = "DEMO" AND text ~ "refund \\"now\\"" ORDER BY updated DESC'
     assert params["maxResults"] == 25
     assert auth == ("agent@example.test", "api-token")
+
+
+@pytest.mark.parametrize("action", ["project", "search", "issue"])
+def test_jira_scoped_token_uses_the_atlassian_gateway(fake_jira, monkeypatch, action):
+    cloud_id = "12345678-1234-1234-1234-123456789abc"
+    monkeypatch.setenv("JIRA_CLOUD_ID", cloud_id)
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        return httpx.Response(200, json={"key": "DEMO", "fields": {"project": {"key": "DEMO"}}})
+
+    monkeypatch.setattr(jira.httpx, "get", get)
+    if action == "project":
+        jira.check_project()
+    elif action == "search":
+        jira.search_issues("refund")
+    else:
+        jira.get_issue("DEMO-7")
+    url, kwargs = calls[0]
+    assert url.startswith(f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/")
+    assert kwargs["auth"] == ("agent@example.test", "api-token")
+    if action == "search":
+        assert kwargs["params"]["jql"].startswith('project = "DEMO" AND ')
+
+
+@pytest.mark.parametrize("cloud_id", ["../other-site", "not-a-uuid", "https://example.test"])
+def test_invalid_jira_cloud_id_never_sends_credentials(fake_jira, monkeypatch, cloud_id):
+    monkeypatch.setenv("JIRA_CLOUD_ID", cloud_id)
+    with pytest.raises(jira.JiraError, match="site UUID"):
+        jira.check_project()
+    assert fake_jira.calls == []
 
 
 def test_jira_issue_returns_description_and_comments_as_text(fake_jira):
