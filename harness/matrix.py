@@ -31,6 +31,7 @@ from harness.decisions import clear_log
 from harness.runner import TurnResult, load_scenario, replay_scenario
 from router.controls import CONTROLS_ENV, Controls, resolve_controls
 from router.policy import load_policy_document
+from scripts.setup_demo import parse_env
 
 REPO_ROOT = Path(__file__).parent.parent
 COMPOSE_BASE = REPO_ROOT / "deploy" / "docker-compose.yml"
@@ -50,13 +51,8 @@ def _load_env_file() -> None:
     """Load deploy/.env into os.environ so LITELLM_MASTER_KEY is available for HTTP calls."""
     if not ENV_FILE.exists():
         return
-    for line in ENV_FILE.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        if key not in os.environ:  # don't override shell env
-            os.environ[key] = val
+    for key, value in parse_env(ENV_FILE).items():
+        os.environ.setdefault(key, value)
 
 
 _load_env_file()

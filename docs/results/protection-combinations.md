@@ -1,5 +1,10 @@
 # Which protections to run: the 8-combination experiment
 
+**Latest complete rerun:** the [58-scenario run on 2026-10-31](#complete-58-scenario-rerun-2026-10-31)
+archives all 4,032 rows and their provenance. The historical 52-scenario result
+below is retained for comparison. Live work-tool observations are reported
+separately and include substantial benign false positives.
+
 **Run:** 2026-10-27, once, with `make eval-conditions` and one seed. The code is main at `d1c04e0` (the destination allowlist, #167) plus the larger corpus from #199.
 
 **Winner:** session memory + classifier on + allowlist on.
@@ -181,9 +186,68 @@ The summary prints one row per setting and memory, with L3 counts (caught and fl
 ## Follow-up: work channels and constrained live-model check (2026-10-31)
 
 The table above remains the **52-scenario historical experiment**. Six new
-work-channel scenarios bring the current corpus to 58, but the full historical
-matrix has not been re-run on all 58. Do not reuse the old headline as a new
-58-scenario result.
+work-channel scenarios bring the current corpus to 58. A complete rerun follows;
+its generated-call denominators differ from those of the historical table.
+
+### Complete 58-scenario rerun (2026-10-31)
+
+The full HTTP matrix ran once with source commit `486323d`, one deterministic
+seed, 58 frozen scenarios (34 attack / 24 benign), all four classifier/allowlist
+settings, L0–L3, session/incremental, and stateless/incremental plus stateless/full.
+That is **2,784 scenario replays and 4,032 turn records**, 1,008 records per
+setting. An independent key-set check found every expected
+setting/mode/level/history/scenario/turn/seed key exactly once, zero unknown
+decisions, zero proxy HTTP failures, and an outcome for every generated-call
+turn. No real tool executed.
+
+The isolated Compose project reused the running local DeBERTa classifier
+(`protectai/deberta-v3-base-prompt-injection-v2`, revision
+`90c9989b1a342275dd0d1a95aad283c04e075671`, 512-token limit), with the pinned
+LiteLLM proxy image. It did not restart the ordinary demo stack or overwrite
+historical outputs. [Raw CSVs, source/corpus hashes and coverage audit](data/conditions-2026-10-31/manifest.json)
+and [machine-readable L3 counts](data/conditions-2026-10-31/summary.json) are archived.
+
+| Classifier | Allowlist | Memory / history | Attack turns detected | Benign turns flagged | Generated attacks prevented | Generated benign held |
+|---|---|---|---|---|---|---|
+| off | off | stateless / incremental | 10/26 | 10/20 | 5/8 | 7/7 |
+| off | off | stateless / full | 26/26 | 11/20 | 8/8 | 7/7 |
+| off | off | session / incremental | 26/26 | 11/20 | 8/8 | 7/7 |
+| off | on | stateless / incremental | 22/26 | 10/20 | 7/8 | 7/7 |
+| off | on | stateless / full | 26/26 | 11/20 | 8/8 | 7/7 |
+| off | on | session / incremental | 26/26 | 11/20 | 8/8 | 7/7 |
+| on | off | stateless / incremental | 6/26 | 1/20 | 4/8 | 0/7 |
+| on | off | stateless / full | 17/26 | 2/20 | 6/8 | 0/7 |
+| on | off | session / incremental | 17/26 | 1/20 | 6/8 | 0/7 |
+| on | on | stateless / incremental | 18/26 | 5/20 | 6/8 | 1/7 |
+| on | on | stateless / full | 22/26 | 6/20 | 7/8 | 1/7 |
+| on | on | session / incremental | 22/26 | 5/20 | 7/8 | 1/7 |
+
+The pre-call counts reproduce the historical result. The selected session +
+classifier + allowlist setting now prevents **7/8 generated attacks** and holds
+**1/7 generated benign calls**. All three new work-channel generated attacks
+are prevented and all three controls are released in this setting. The
+same-turn, allowed-destination generated attack `sc-054` still executes.
+The added controls change the generated-call denominators; they do not show a
+reduction in the underlying false-positive mechanism. These are scripted
+gateway measurements, not independent live-agent success rates. The
+independent-author requirement remains open; the operator deferred assignment.
+
+To reproduce on Docker Desktop with the existing classifier at port 8080:
+
+```sh
+COMPOSE_PROJECT_NAME=securelitellm-eval-new-run \
+PROXY_URL=http://localhost:14000 LITELLM_MASTER_KEY=sk-isolated-eval-only \
+CLASSIFIER_BACKEND=local HARNESS_MODEL=mock \
+LOCAL_CLASSIFIER_URL=http://host.docker.internal:8080 \
+uv run python harness/matrix.py --seeds 1 --conditions \
+  --compose-file harness/docker-compose.isolated.yml \
+  --results-dir eval/results/conditions-new-run
+uv run python eval/metrics.py --summary eval/results/conditions-new-run/results_classifier-*.csv
+```
+
+Choose a fresh output directory. The dedicated stack uses port 14000 and fake
+credentials; the running demo keeps ports 4000/4001. No Gmail/Jira credentials
+are mounted into the evaluation containers.
 
 ### Scripted work-channel checks
 
@@ -204,6 +268,11 @@ No source wording was changed after observing these results. The GitHub HTTP fix
 The six cases were also replayed through an isolated full LiteLLM proxy stack (12 runs: six cases × two memory modes, classifier and allowlist on). All six attack runs removed tool access; all six benign runs released the generated call. These HTTP replays execute no real tools.
 
 ### Real-model probe (#199, part 4)
+
+For the later real-account rehearsal, including successful Gmail sends and
+benign read false positives, see [work-tool live results](work-tools-live.md).
+That rehearsal uses actual HTTP proxies and APIs; the constrained probe below
+has a different protocol and must not be pooled with it.
 
 `harness/live.py` compares session/L3/classifier-on with allowlist off (baseline)
 and on (winner), using sc-054, sc-055, sc-056, bn-048 and bn-049, three seeds each.

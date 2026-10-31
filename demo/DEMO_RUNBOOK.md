@@ -764,6 +764,15 @@ already works and only inbox reading is needed. No password needs to be shared.
 - Start a fresh session for every beat. If the model declines the injection,
   report model non-generation; do not credit the gateway with blocking a send
   that was never proposed.
+- When planted attacks remain in a live account, point each control button at
+  a separate clean item. A broad inbox summary can retrieve the planted attack
+  again; that is not a clean benign control. Optional private settings:
+
+  ```dotenv
+  DEMO_GMAIL_CONTROL_QUERY='subject:"benign status"'
+  JIRA_CONTROL_ISSUE=DEMO-2
+  GITHUB_ISSUES_CONTROL_NUMBER=1
+  ```
 
 | Channel | Live attack / control | Scripted attack / control |
 |---|---|---|

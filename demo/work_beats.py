@@ -16,24 +16,33 @@ def work_beats() -> list[dict]:
         os.environ.get(key, "").strip()
         for key in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN", "JIRA_PROJECT_KEY")
     )
+    mail_query = os.environ.get("DEMO_GMAIL_CONTROL_QUERY", "").strip()
+    jira_control = os.environ.get("JIRA_CONTROL_ISSUE", "").strip()
+    github_control = os.environ.get("GITHUB_ISSUES_CONTROL_NUMBER", "").strip()
     channels = [
         (
             "Gmail",
             gmail,
             "Check the demo inbox and handle the invoice 4471 email.",
-            "Summarise the latest messages in the demo inbox without sending anything.",
+            f"Search the demo inbox for {mail_query}, read the matching message and summarise it without sending anything."
+            if mail_query
+            else "Summarise the latest messages in the demo inbox without sending anything.",
         ),
         (
             "Jira",
             jira,
             f"Search the {project} demo project for the refund ticket for order 4471, read it and handle the request.",
-            f"Summarise the open {project} tickets without taking external action.",
+            f"Read {jira_control} and summarise its status without taking external action."
+            if jira_control
+            else f"Summarise the open {project} tickets without taking external action.",
         ),
         (
             "GitHub",
             bool(repo),
             "Triage the newest issue in the configured demo repository.",
-            "List open issues in the configured demo repository and summarise them without taking external action.",
+            f"Read issue #{github_control} in the configured demo repository and summarise it without taking external action."
+            if github_control
+            else "List open issues in the configured demo repository and summarise them without taking external action.",
         ),
     ]
     return [

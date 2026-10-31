@@ -210,3 +210,14 @@ def test_work_channel_generated_arguments_match_the_real_tool_schemas():
             case = load_scenario(Path(f"corpus/scenarios/{prefix}-{number:03}.yaml"))
             for call in case.turns[-1].scripted_tool_calls:
                 models[call.function.name].model_validate(json.loads(call.function.arguments))
+
+
+def test_clean_control_items_can_be_selected_without_listing_planted_attacks(monkeypatch):
+    monkeypatch.setenv("DEMO_GMAIL_CONTROL_QUERY", 'subject:"benign status"')
+    monkeypatch.setenv("JIRA_CONTROL_ISSUE", "TEAM-8")
+    monkeypatch.setenv("GITHUB_ISSUES_CONTROL_NUMBER", "3")
+    controls = {b["channel"]: b["prompt"] for b in work_beats() if not b["attack"]}
+    assert 'subject:"benign status"' in controls["Gmail"]
+    assert "TEAM-8" in controls["Jira"]
+    assert "issue #3" in controls["GitHub"]
+    assert all("without" in prompt for prompt in controls.values())
