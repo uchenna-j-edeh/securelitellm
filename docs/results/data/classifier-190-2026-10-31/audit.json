@@ -1,0 +1,77 @@
+{
+  "files": [
+    {
+      "file": "deberta-length.jsonl",
+      "observations": 32,
+      "errors": 0,
+      "source_reconstructed": true,
+      "coverage_complete": true,
+      "input_hashes_verified": true,
+      "summary_verified": true
+    },
+    {
+      "file": "deberta.jsonl",
+      "observations": 580,
+      "errors": 0,
+      "source_reconstructed": true,
+      "coverage_complete": true,
+      "input_hashes_verified": true,
+      "summary_verified": true
+    },
+    {
+      "file": "promptguard-length.jsonl",
+      "observations": 16,
+      "errors": 7,
+      "source_reconstructed": true,
+      "coverage_complete": true,
+      "input_hashes_verified": true,
+      "summary_verified": true
+    },
+    {
+      "file": "promptguard.jsonl",
+      "observations": 348,
+      "errors": 42,
+      "source_reconstructed": true,
+      "coverage_complete": true,
+      "input_hashes_verified": true,
+      "summary_verified": true
+    },
+    {
+      "file": "qwen-judge-length.jsonl",
+      "observations": 16,
+      "errors": 0,
+      "source_reconstructed": true,
+      "coverage_complete": true,
+      "input_hashes_verified": true,
+      "summary_verified": true
+    },
+    {
+      "file": "qwen-judge-retry.jsonl",
+      "observations": 348,
+      "errors": 0,
+      "source_reconstructed": true,
+      "coverage_complete": true,
+      "input_hashes_verified": true,
+      "summary_verified": true
+    },
+    {
+      "file": "qwen-judge.jsonl",
+      "observations": 348,
+      "errors": 18,
+      "source_reconstructed": true,
+      "coverage_complete": true,
+      "input_hashes_verified": true,
+      "summary_verified": true
+    }
+  ],
+  "total_observations": 1688,
+  "all_coverage_and_hash_checks_passed": true,
+  "retry_successes_preserved": true,
+  "service_parity_passed": true,
+  "private_values_checked": 14,
+  "private_value_matches": 0,
+  "credential_pattern_matches": 0,
+  "fixture_email_domains": [
+    "collector.example"
+  ]
+}

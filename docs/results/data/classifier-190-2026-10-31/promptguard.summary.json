@@ -1,0 +1,1859 @@
+{
+  "manifest": {
+    "backend": "promptguard",
+    "corpus_sha256": "2214daf8fd4e0b24308e47f4c1ec274d05fd0b2bf2ac3fb538d9e80ca10ec93a",
+    "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+    "judge_prompt": null,
+    "model": "meta-llama/llama-prompt-guard-2-86m",
+    "normalizer_sha256": "6b4f7c1f323bf36aa69e12662339cc2039dbb7e05033555fa753ab4fc88c4de0",
+    "probe_count": 116,
+    "python": "3.13.9",
+    "revision": "provider-unexposed",
+    "schema_version": 1,
+    "source_sha256": "0b8d6221aa4c10ddd178fe03cbee32a48b36ab95b203cbe56431cc5c7a708229",
+    "started_at": "2026-10-31T17:30:41Z",
+    "strategies": [
+      "raw",
+      "current",
+      "base64-decoded"
+    ],
+    "temperature": null,
+    "type": "manifest"
+  },
+  "results": {
+    "base64-decoded": {
+      "all": {
+        "attacks": 51,
+        "benign": 51,
+        "detection_rate": 0.7843137254901961,
+        "errors": 14,
+        "fn": 11,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 102,
+        "total": 116,
+        "tp": 40
+      },
+      "format:base64": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:code": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:csv": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:html": {
+        "attacks": 5,
+        "benign": 2,
+        "detection_rate": 0.8,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 7,
+        "total": 7,
+        "tp": 4
+      },
+      "format:json": {
+        "attacks": 4,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 2,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 6,
+        "total": 6,
+        "tp": 2
+      },
+      "format:log": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:markdown": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:plain": {
+        "attacks": 2,
+        "benign": 5,
+        "detection_rate": 0.5,
+        "errors": 14,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 7,
+        "total": 21,
+        "tp": 1
+      },
+      "format:prose": {
+        "attacks": 13,
+        "benign": 15,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 28,
+        "total": 28,
+        "tp": 13
+      },
+      "format:record": {
+        "attacks": 13,
+        "benign": 13,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 26,
+        "total": 26,
+        "tp": 13
+      },
+      "format:stacktrace": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:yaml": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "group:content": {
+        "attacks": 26,
+        "benign": 28,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 54,
+        "total": 54,
+        "tp": 26
+      },
+      "group:format": {
+        "attacks": 20,
+        "benign": 20,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 10,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 40,
+        "total": 40,
+        "tp": 10
+      },
+      "group:length": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 14,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 14,
+        "tp": 0
+      },
+      "group:live-control": {
+        "attacks": 0,
+        "benign": 3,
+        "detection_rate": null,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 3,
+        "total": 3,
+        "tp": 0
+      },
+      "group:metadata": {
+        "attacks": 5,
+        "benign": 0,
+        "detection_rate": 0.8,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": null,
+        "scored": 5,
+        "total": 5,
+        "tp": 4
+      },
+      "latency_ms": {
+        "median": 2179.4865
+      },
+      "position:end": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "position:middle": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "position:none": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 2,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 2,
+        "tp": 0
+      },
+      "position:start": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "probability_ranges": {
+        "BENIGN": {
+          "max": 0.03713029995560646,
+          "median": 0.0004121168749406934,
+          "min": 0.0003447519557084888
+        },
+        "INJECTION": {
+          "max": 0.9978525638580322,
+          "median": 0.996479332447052,
+          "min": 0.0008150374051183462
+        }
+      },
+      "split:challenge": {
+        "attacks": 21,
+        "benign": 16,
+        "detection_rate": 0.47619047619047616,
+        "errors": 8,
+        "fn": 11,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 37,
+        "total": 45,
+        "tp": 10
+      },
+      "split:discovery": {
+        "attacks": 30,
+        "benign": 35,
+        "detection_rate": 1.0,
+        "errors": 6,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 65,
+        "total": 71,
+        "tp": 30
+      },
+      "thresholds": {
+        "0.1": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7843137254901961,
+            "errors": 14,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 40
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 1.0,
+            "errors": 6,
+            "fn": 0,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 30
+          }
+        },
+        "0.25": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7843137254901961,
+            "errors": 14,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 40
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 1.0,
+            "errors": 6,
+            "fn": 0,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 30
+          }
+        },
+        "0.5": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7843137254901961,
+            "errors": 14,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 40
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 1.0,
+            "errors": 6,
+            "fn": 0,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 30
+          }
+        },
+        "0.75": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7843137254901961,
+            "errors": 14,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 40
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 1.0,
+            "errors": 6,
+            "fn": 0,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 30
+          }
+        },
+        "0.9": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7843137254901961,
+            "errors": 14,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 40
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 1.0,
+            "errors": 6,
+            "fn": 0,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 30
+          }
+        },
+        "0.95": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7843137254901961,
+            "errors": 14,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 40
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 1.0,
+            "errors": 6,
+            "fn": 0,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 30
+          }
+        },
+        "0.99": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7058823529411765,
+            "errors": 14,
+            "fn": 15,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 36
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.42857142857142855,
+            "errors": 8,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 9
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9,
+            "errors": 6,
+            "fn": 3,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 27
+          }
+        },
+        "0.999": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.0,
+            "errors": 14,
+            "fn": 51,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 0
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.0,
+            "errors": 8,
+            "fn": 21,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 0
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.0,
+            "errors": 6,
+            "fn": 30,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 0
+          }
+        }
+      }
+    },
+    "current": {
+      "all": {
+        "attacks": 51,
+        "benign": 51,
+        "detection_rate": 0.7647058823529411,
+        "errors": 14,
+        "fn": 12,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 102,
+        "total": 116,
+        "tp": 39
+      },
+      "format:base64": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.0,
+        "errors": 0,
+        "fn": 2,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 0
+      },
+      "format:code": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:csv": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:html": {
+        "attacks": 5,
+        "benign": 2,
+        "detection_rate": 0.8,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 7,
+        "total": 7,
+        "tp": 4
+      },
+      "format:json": {
+        "attacks": 4,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 2,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 6,
+        "total": 6,
+        "tp": 2
+      },
+      "format:log": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:markdown": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:plain": {
+        "attacks": 2,
+        "benign": 5,
+        "detection_rate": 0.5,
+        "errors": 14,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 7,
+        "total": 21,
+        "tp": 1
+      },
+      "format:prose": {
+        "attacks": 13,
+        "benign": 15,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 28,
+        "total": 28,
+        "tp": 13
+      },
+      "format:record": {
+        "attacks": 13,
+        "benign": 13,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 26,
+        "total": 26,
+        "tp": 13
+      },
+      "format:stacktrace": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:yaml": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "group:content": {
+        "attacks": 26,
+        "benign": 28,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 54,
+        "total": 54,
+        "tp": 26
+      },
+      "group:format": {
+        "attacks": 20,
+        "benign": 20,
+        "detection_rate": 0.45,
+        "errors": 0,
+        "fn": 11,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 40,
+        "total": 40,
+        "tp": 9
+      },
+      "group:length": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 14,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 14,
+        "tp": 0
+      },
+      "group:live-control": {
+        "attacks": 0,
+        "benign": 3,
+        "detection_rate": null,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 3,
+        "total": 3,
+        "tp": 0
+      },
+      "group:metadata": {
+        "attacks": 5,
+        "benign": 0,
+        "detection_rate": 0.8,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": null,
+        "scored": 5,
+        "total": 5,
+        "tp": 4
+      },
+      "latency_ms": {
+        "median": 2179.6715000000004
+      },
+      "position:end": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "position:middle": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "position:none": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 2,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 2,
+        "tp": 0
+      },
+      "position:start": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "probability_ranges": {
+        "BENIGN": {
+          "max": 0.03713029995560646,
+          "median": 0.0004176795482635498,
+          "min": 0.0003447519557084888
+        },
+        "INJECTION": {
+          "max": 0.9978525638580322,
+          "median": 0.996479332447052,
+          "min": 0.0006176432361826301
+        }
+      },
+      "split:challenge": {
+        "attacks": 21,
+        "benign": 16,
+        "detection_rate": 0.47619047619047616,
+        "errors": 8,
+        "fn": 11,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 37,
+        "total": 45,
+        "tp": 10
+      },
+      "split:discovery": {
+        "attacks": 30,
+        "benign": 35,
+        "detection_rate": 0.9666666666666667,
+        "errors": 6,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 65,
+        "total": 71,
+        "tp": 29
+      },
+      "thresholds": {
+        "0.1": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.25": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.5": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.75": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.9": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.95": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.99": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7058823529411765,
+            "errors": 14,
+            "fn": 15,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 36
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.42857142857142855,
+            "errors": 8,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 9
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9,
+            "errors": 6,
+            "fn": 3,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 27
+          }
+        },
+        "0.999": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.0,
+            "errors": 14,
+            "fn": 51,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 0
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.0,
+            "errors": 8,
+            "fn": 21,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 0
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.0,
+            "errors": 6,
+            "fn": 30,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 0
+          }
+        }
+      }
+    },
+    "raw": {
+      "all": {
+        "attacks": 51,
+        "benign": 51,
+        "detection_rate": 0.7647058823529411,
+        "errors": 14,
+        "fn": 12,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 102,
+        "total": 116,
+        "tp": 39
+      },
+      "format:base64": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.0,
+        "errors": 0,
+        "fn": 2,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 0
+      },
+      "format:code": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:csv": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:html": {
+        "attacks": 5,
+        "benign": 2,
+        "detection_rate": 0.8,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 7,
+        "total": 7,
+        "tp": 4
+      },
+      "format:json": {
+        "attacks": 4,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 2,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 6,
+        "total": 6,
+        "tp": 2
+      },
+      "format:log": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:markdown": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:plain": {
+        "attacks": 2,
+        "benign": 5,
+        "detection_rate": 0.5,
+        "errors": 14,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 7,
+        "total": 21,
+        "tp": 1
+      },
+      "format:prose": {
+        "attacks": 13,
+        "benign": 15,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 28,
+        "total": 28,
+        "tp": 13
+      },
+      "format:record": {
+        "attacks": 13,
+        "benign": 13,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 26,
+        "total": 26,
+        "tp": 13
+      },
+      "format:stacktrace": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "format:yaml": {
+        "attacks": 2,
+        "benign": 2,
+        "detection_rate": 0.5,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 4,
+        "total": 4,
+        "tp": 1
+      },
+      "group:content": {
+        "attacks": 26,
+        "benign": 28,
+        "detection_rate": 1.0,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 54,
+        "total": 54,
+        "tp": 26
+      },
+      "group:format": {
+        "attacks": 20,
+        "benign": 20,
+        "detection_rate": 0.45,
+        "errors": 0,
+        "fn": 11,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 40,
+        "total": 40,
+        "tp": 9
+      },
+      "group:length": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 14,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 14,
+        "tp": 0
+      },
+      "group:live-control": {
+        "attacks": 0,
+        "benign": 3,
+        "detection_rate": null,
+        "errors": 0,
+        "fn": 0,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 3,
+        "total": 3,
+        "tp": 0
+      },
+      "group:metadata": {
+        "attacks": 5,
+        "benign": 0,
+        "detection_rate": 0.8,
+        "errors": 0,
+        "fn": 1,
+        "fp": 0,
+        "fpr": null,
+        "scored": 5,
+        "total": 5,
+        "tp": 4
+      },
+      "latency_ms": {
+        "median": 2179.6715000000004
+      },
+      "position:end": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "position:middle": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "position:none": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 2,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 2,
+        "tp": 0
+      },
+      "position:start": {
+        "attacks": 0,
+        "benign": 0,
+        "detection_rate": null,
+        "errors": 4,
+        "fn": 0,
+        "fp": 0,
+        "fpr": null,
+        "scored": 0,
+        "total": 4,
+        "tp": 0
+      },
+      "probability_ranges": {
+        "BENIGN": {
+          "max": 0.03713029995560646,
+          "median": 0.0004176795482635498,
+          "min": 0.0003447519557084888
+        },
+        "INJECTION": {
+          "max": 0.9978525638580322,
+          "median": 0.996479332447052,
+          "min": 0.0006176432361826301
+        }
+      },
+      "split:challenge": {
+        "attacks": 21,
+        "benign": 16,
+        "detection_rate": 0.47619047619047616,
+        "errors": 8,
+        "fn": 11,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 37,
+        "total": 45,
+        "tp": 10
+      },
+      "split:discovery": {
+        "attacks": 30,
+        "benign": 35,
+        "detection_rate": 0.9666666666666667,
+        "errors": 6,
+        "fn": 1,
+        "fp": 0,
+        "fpr": 0.0,
+        "scored": 65,
+        "total": 71,
+        "tp": 29
+      },
+      "thresholds": {
+        "0.1": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.25": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.5": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.75": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.9": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.95": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7647058823529411,
+            "errors": 14,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 39
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.47619047619047616,
+            "errors": 8,
+            "fn": 11,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 10
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9666666666666667,
+            "errors": 6,
+            "fn": 1,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 29
+          }
+        },
+        "0.99": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.7058823529411765,
+            "errors": 14,
+            "fn": 15,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 36
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.42857142857142855,
+            "errors": 8,
+            "fn": 12,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 9
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.9,
+            "errors": 6,
+            "fn": 3,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 27
+          }
+        },
+        "0.999": {
+          "all": {
+            "attacks": 51,
+            "benign": 51,
+            "detection_rate": 0.0,
+            "errors": 14,
+            "fn": 51,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 102,
+            "total": 116,
+            "tp": 0
+          },
+          "split:challenge": {
+            "attacks": 21,
+            "benign": 16,
+            "detection_rate": 0.0,
+            "errors": 8,
+            "fn": 21,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 37,
+            "total": 45,
+            "tp": 0
+          },
+          "split:discovery": {
+            "attacks": 30,
+            "benign": 35,
+            "detection_rate": 0.0,
+            "errors": 6,
+            "fn": 30,
+            "fp": 0,
+            "fpr": 0.0,
+            "scored": 65,
+            "total": 71,
+            "tp": 0
+          }
+        }
+      }
+    }
+  },
+  "results_sha256": "41fdf33f102113be4def24155746edefb518f6dfb9e4f94e59ce34c6ca48aa03"
+}

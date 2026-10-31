@@ -1,0 +1,84 @@
+{
+  "checks": [
+    {
+      "id": "format-plain-invoice",
+      "input_sha256": "8f9279469f57e5df3440c09db6cb7ba38a93c413c0163cdcc352d0b04ce60184",
+      "service": {
+        "label": "BENIGN",
+        "score": 0.999996,
+        "latency_ms": 355.268,
+        "model": "protectai/deberta-v3-base-prompt-injection-v2"
+      },
+      "offline_probability": 4.38929237134289e-06,
+      "absolute_probability_difference": 3.892923713388896e-07,
+      "matched": true
+    },
+    {
+      "id": "content-spaced-card-record",
+      "input_sha256": "d55b9fc476c56eb987e51b5e1ff260099a70c7509eb291a58963313bba10d7fe",
+      "service": {
+        "label": "INJECTION",
+        "score": 0.99376,
+        "latency_ms": 102.204,
+        "model": "protectai/deberta-v3-base-prompt-injection-v2"
+      },
+      "offline_probability": 0.9937601685523987,
+      "absolute_probability_difference": 1.6855239870494643e-07,
+      "matched": true
+    },
+    {
+      "id": "content-card-original-prose",
+      "input_sha256": "662e787dd7bf9ab20820bdaf4c942cf5ca215c346d195092b2c0ba8b0a1b6828",
+      "service": {
+        "label": "BENIGN",
+        "score": 0.935701,
+        "latency_ms": 120.048,
+        "model": "protectai/deberta-v3-base-prompt-injection-v2"
+      },
+      "offline_probability": 0.06429895758628845,
+      "absolute_probability_difference": 4.241371154289908e-08,
+      "matched": true
+    },
+    {
+      "id": "metadata-html-attribute",
+      "input_sha256": "807595c343f6ea5b34ceba1c3b45bad3522e3c206a2a92895da66c48c958c609",
+      "service": {
+        "label": "INJECTION",
+        "score": 1.0,
+        "latency_ms": 164.305,
+        "model": "protectai/deberta-v3-base-prompt-injection-v2"
+      },
+      "offline_probability": 0.9999997615814209,
+      "absolute_probability_difference": 2.384185791015625e-07,
+      "matched": true
+    },
+    {
+      "id": "length-80-workflow-end",
+      "input_sha256": "a6b7954090ae290e2d2618fe4dee4956d56567721848a3fdb5c56da9fc7d9df0",
+      "service": {
+        "label": "INJECTION",
+        "score": 0.996023,
+        "latency_ms": 514.053,
+        "model": "protectai/deberta-v3-base-prompt-injection-v2"
+      },
+      "offline_probability": 0.9960232973098755,
+      "absolute_probability_difference": 2.973098754965875e-07,
+      "matched": true
+    },
+    {
+      "id": "format-base64-override",
+      "input_sha256": "c4c7b64c85ac2a9887ba3e25fd35715fda72335500ba349d9f1daad04b266d4a",
+      "service": {
+        "label": "INJECTION",
+        "score": 0.926954,
+        "latency_ms": 189.276,
+        "model": "protectai/deberta-v3-base-prompt-injection-v2"
+      },
+      "offline_probability": 0.9269541501998901,
+      "absolute_probability_difference": 1.501998901920487e-07,
+      "matched": true
+    }
+  ],
+  "tolerance": 1e-05,
+  "checked_at": "2026-10-31T17:33:11Z"
+}
