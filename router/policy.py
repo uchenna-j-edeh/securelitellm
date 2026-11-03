@@ -73,6 +73,7 @@ _ALLOWED_FEATURES = {
     "classifier_error",
     "classifier_injection",
     "destination_not_allowed",
+    "destination_not_user_named",
     "legacy_function_calling",
     "malformed_tool_call",
     "sink_requested",
@@ -281,4 +282,5 @@ _POLICY_SECTIONS = {
     "matrix",
     "controls",
     "allowed_destinations",
+    "own_destinations",
 }

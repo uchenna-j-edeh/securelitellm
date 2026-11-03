@@ -12,6 +12,11 @@ and stays there; this module covers the rest.
   allowlist   on: every send destination must be on the policy's
                   allowed_destinations (#167, router/allowlist.py).
               off: destinations are not checked.
+  user_named  on: every send destination must appear in the user message that
+                  started the turn (#212, router/allowlist.py), so tool content
+                  can't choose a send or where it goes. With the allowlist on,
+                  a send goes only to listed destinations the user typed.
+              off: not checked.
 
 Set in the policy's ``controls:`` section; ROUTER_CONTROLS overrides it, e.g.
 ``ROUTER_CONTROLS="classifier=off,allowlist=off"``. Unknown names or values
@@ -34,17 +39,27 @@ _OFF = {"off", "false", "no", "0"}
 class Controls:
     classifier: bool = True
     allowlist: bool = False
+    user_named: bool = False
 
     def summary(self) -> dict[str, str]:
         """{"classifier": "on", ...} for startup and decision records."""
         return {name: "on" if value else "off" for name, value in asdict(self).items()}
 
     def label(self) -> str:
-        """``classifier=on,allowlist=off``: the ROUTER_CONTROLS form, used in eval output."""
-        return ",".join(f"{name}={value}" for name, value in self.summary().items())
+        """``classifier=on,allowlist=off``: the ROUTER_CONTROLS form, used in eval output.
+
+        Switches added after the 8-combination runs (user_named, #212) appear
+        only when on, so earlier result files and labels keep their names.
+        """
+        return ",".join(
+            f"{name}={value}"
+            for name, value in self.summary().items()
+            if name in _LABEL_ALWAYS or value == "on"
+        )
 
 
 _NAMES = tuple(asdict(Controls()))
+_LABEL_ALWAYS = ("classifier", "allowlist")
 
 
 def _switch(name: str, value: Any, where: str) -> bool:

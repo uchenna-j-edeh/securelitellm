@@ -25,11 +25,23 @@ that inbox are known.
 
 Decision records name what was refused by domain, host or channel only, so a
 full address is never logged.
+
+User-named destinations (#212, switch ``user_named``): a send may also be
+required to go only where the user asked. Each send is checked against the
+user message that started its turn (the latest user message before the
+assistant message that made the call). Every destination must appear there,
+matched exactly as above: the full email address, the URL host, or the exact
+#channel. A destination that appears only in a tool result, or that the model
+chose, is not named, so tool content can't decide that a send happens or
+where it goes. An address the user named in an earlier turn doesn't count.
+The user's own destinations (policy ``own_destinations:``, same entry forms)
+count as named in every turn: sending to yourself isn't exfiltration.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from email.utils import getaddresses
 from typing import Any, Iterator
@@ -58,6 +70,12 @@ DESTINATION_ARGS = frozenset(
 )
 
 NO_DESTINATION = "(no destination)"
+
+# Destinations as a user types them in a message (#212).
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"']+")
+_BARE_HOST_RE = re.compile(r"(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![\w-])")
+_CHANNEL_RE = re.compile(r"(?<![\w&#])#[A-Za-z0-9][\w-]*")
 
 
 def _is_url(value: str) -> bool:
@@ -107,6 +125,28 @@ class Allowlist:
                 )
         return cls(frozenset(addresses), frozenset(hosts), frozenset(channels))
 
+    @classmethod
+    def named_in(cls, text: str) -> Allowlist:
+        """The destinations a user typed in *text*: exact addresses, URL hosts, #channels.
+
+        A bare host ("reports.example.com") counts as the host; the domain of
+        an email address does not.
+        """
+        addresses = {a.lower() for a in _EMAIL_RE.findall(text)}
+        rest = _EMAIL_RE.sub(" ", text)
+        hosts = {h for h in (_host(u) for u in _URL_RE.findall(rest)) if h}
+        rest = _URL_RE.sub(" ", rest)
+        hosts.update(h.lower() for h in _BARE_HOST_RE.findall(rest))
+        channels = {c.lower() for c in _CHANNEL_RE.findall(rest)}
+        return cls(frozenset(addresses), frozenset(hosts), frozenset(channels))
+
+    def __or__(self, other: Allowlist) -> Allowlist:
+        return Allowlist(
+            self.addresses | other.addresses,
+            self.hosts | other.hosts,
+            self.channels | other.channels,
+        )
+
     def refused(self, destination: str) -> list[str]:
         """Labels for the parts of *destination* that are not allowed; empty if all are."""
         value = destination.strip()
@@ -141,6 +181,46 @@ class Allowlist:
         return sorted(refused)
 
 
+_NOTHING = Allowlist(frozenset(), frozenset(), frozenset())
+
+
+def not_user_named(sinks: list[dict[str, Any]], own: Allowlist = _NOTHING) -> list[str]:
+    """Labels of every send destination the user didn't name in that turn (#212), sorted.
+
+    *sinks* come from :func:`sinks_with_arguments`, or carry ``_user_request``
+    themselves (generated calls). *own* is the user's own destinations, named
+    in every turn. A send with no destination is not named (fail closed), as
+    with the allowlist.
+    """
+    refused: set[str] = set()
+    for sink in sinks:
+        named = Allowlist.named_in(sink.get("_user_request", "")) | own
+        refused.update(named.unlisted([sink]))
+    return sorted(refused)
+
+
+def message_text(message: dict[str, Any]) -> str:
+    """The text of a chat message: a string, or the text parts of a content list."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            part["text"]
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
+def latest_user_request(messages: list[dict[str, Any]]) -> str:
+    """The text of the last user message: the request a generated call answers."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            return message_text(msg)
+    return ""
+
+
 def destinations(arguments: str) -> Iterator[str]:
     """Every destination named in a tool call's JSON arguments."""
     try:
@@ -168,12 +248,29 @@ def destinations(arguments: str) -> Iterator[str]:
 def sinks_with_arguments(
     sinks: list[dict[str, Any]], messages: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Request sinks (from classify_sinks) with their raw arguments attached."""
+    """Request sinks (from classify_sinks) with their raw arguments attached.
+
+    Each also gets ``_user_request``: the text of the user message that started
+    its turn (#212). Neither key is logged.
+    """
     by_id: dict[str, str] = {}
+    request_by_id: dict[str, str] = {}
+    user_request = ""
     for msg in messages:
+        if msg.get("role") == "user":
+            user_request = message_text(msg)
+            continue
         if msg.get("role") != "assistant":
             continue
         for call in msg.get("tool_calls") or []:
             arguments = (call.get("function") or {}).get("arguments")
             by_id[call.get("id", "")] = arguments if isinstance(arguments, str) else ""
-    return [{**sink, "_arguments": by_id.get(sink.get("id") or "", "")} for sink in sinks]
+            request_by_id[call.get("id", "")] = user_request
+    return [
+        {
+            **sink,
+            "_arguments": by_id.get(sink.get("id") or "", ""),
+            "_user_request": request_by_id.get(sink.get("id") or "", ""),
+        }
+        for sink in sinks
+    ]

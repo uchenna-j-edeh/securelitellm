@@ -36,7 +36,12 @@ from typing import Any
 
 from litellm.integrations.custom_logger import CustomLogger
 
-from router.allowlist import Allowlist, sinks_with_arguments
+from router.allowlist import (
+    Allowlist,
+    latest_user_request,
+    not_user_named,
+    sinks_with_arguments,
+)
 from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.controls import resolve_controls
@@ -232,6 +237,10 @@ class RouterHook(CustomLogger):
             else None
         )
         self._allowlist = allowlist if self._controls.allowlist else None
+        # The user's own destinations count as named (#212); validated whenever present.
+        self._own_destinations = Allowlist.from_entries(
+            policy_document.get("own_destinations") or []
+        )
         if self.config.lock and not self._controls.classifier:
             raise ValueError("ROUTER_LOCK=true rejects unsafe config: classifier=off")
         # classifier=off (#196): not part of this configuration, so not created.
@@ -432,10 +441,12 @@ class RouterHook(CustomLogger):
             data.get("stream") and (data.get("tools") or data.get("functions"))
         )
         features["legacy_function_calling"] = _uses_legacy_function_calling(data, messages)
-        if self._allowlist is not None:
-            _check_destinations(
-                features, self._allowlist, sinks_with_arguments(classify_sinks(messages), messages)
-            )
+        if self._allowlist is not None or self._controls.user_named:
+            request_sinks = sinks_with_arguments(classify_sinks(messages), messages)
+            if self._allowlist is not None:
+                _check_destinations(features, self._allowlist, request_sinks)
+            if self._controls.user_named:
+                _check_user_named(features, request_sinks, self._own_destinations)
 
         sources = classify_sources(messages)
         # Trusted first-party sources (sink-result echoes) are never scanned or
@@ -659,6 +670,13 @@ class RouterHook(CustomLogger):
 
         if self._allowlist is not None:
             _check_destinations(features, self._allowlist, egress_sinks)
+        if self._controls.user_named:
+            user_request = latest_user_request(messages)
+            _check_user_named(
+                features,
+                [{**sink, "_user_request": user_request} for sink in egress_sinks],
+                self._own_destinations,
+            )
 
         risk_score, assessed_level, matched_rules = self._policy.assess(features)
         risk_level = _max_level(assessed_level, pre_level or _MISSING_PRE_CALL_LEVEL)
@@ -745,6 +763,18 @@ def _check_destinations(
     unlisted = allowlist.unlisted(sinks)
     features["destination_not_allowed"] = bool(unlisted)
     features["unlisted_destinations"] = unlisted
+
+
+def _check_user_named(
+    features: dict[str, Any], sinks: list[dict[str, Any]], own: Allowlist
+) -> None:
+    """Set the user-named features (#212): which send destinations the user didn't type.
+
+    Labels are domains, hosts or channels only, never a full address.
+    """
+    unnamed = not_user_named(sinks, own)
+    features["destination_not_user_named"] = bool(unnamed)
+    features["unnamed_destinations"] = unnamed
 
 
 def _init_classifier(backend: str) -> BaseClassifier | None:

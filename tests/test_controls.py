@@ -17,8 +17,8 @@ from tests._sessions import issued, key
 
 def test_defaults_are_todays_configuration():
     controls = resolve_controls({}, env="")
-    assert controls == Controls(classifier=True, allowlist=False)
-    assert controls.summary() == {"classifier": "on", "allowlist": "off"}
+    assert controls == Controls(classifier=True, allowlist=False, user_named=False)
+    assert controls.summary() == {"classifier": "on", "allowlist": "off", "user_named": "off"}
     assert controls.label() == "classifier=on,allowlist=off"
 
 
@@ -140,13 +140,17 @@ def test_classifier_off_is_never_created_and_is_recorded(monkeypatch, log_path):
     assert hook._classifier is None
     startup = _records(log_path)[0]
     assert startup["event"] == "startup"
-    assert startup["controls"] == {"classifier": "off", "allowlist": "off"}
+    assert startup["controls"] == {"classifier": "off", "allowlist": "off", "user_named": "off"}
 
 
 def test_classifier_on_is_the_default(monkeypatch, log_path):
     hook = _make_hook(monkeypatch, log_path, "stateless", controls="")
     assert hook._classifier is not None
-    assert _records(log_path)[0]["controls"] == {"classifier": "on", "allowlist": "off"}
+    assert _records(log_path)[0]["controls"] == {
+        "classifier": "on",
+        "allowlist": "off",
+        "user_named": "off",
+    }
 
 
 @pytest.mark.asyncio
@@ -218,3 +222,20 @@ def test_lock_rejects_classifier_off(monkeypatch, log_path):
     monkeypatch.setenv("ROUTER_LOCK", "true")
     with pytest.raises(ValueError, match="classifier=off"):
         _make_hook(monkeypatch, log_path, "session")
+
+
+def test_user_named_appears_in_the_label_only_when_on():
+    off = resolve_controls({}, env="")
+    on = resolve_controls({}, env="user_named=on")
+    assert off.label() == "classifier=on,allowlist=off"
+    assert on.label() == "classifier=on,allowlist=off,user_named=on"
+
+
+def test_conditions_csv_names_are_unchanged_and_include_user_named_when_on():
+    from harness.matrix import conditions_csv
+
+    assert conditions_csv(Controls()).name == "results_classifier-on_allowlist-off.csv"
+    assert (
+        conditions_csv(Controls(allowlist=True, user_named=True)).name
+        == "results_classifier-on_allowlist-on_user_named-on.csv"
+    )

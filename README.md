@@ -806,7 +806,7 @@ tests/
 
 ## Architecture decisions
 
-See `docs/adr/` for ADR-001 through ADR-007. Key decisions:
+See `docs/adr/` for ADR-001 through ADR-009. Key decisions:
 
 - Session = one agent run (ADR-001)
 - Taint tracker, not full history pooling (ADR-002)
@@ -815,5 +815,7 @@ See `docs/adr/` for ADR-001 through ADR-007. Key decisions:
 - Threat model: indirect/content-borne injection only; direct user injection out of scope (ADR-005)
 - eBPF backstop parked until M4 review (ADR-006)
 - Four context-richness levels L0–L3 (ADR-007)
+- Proxy-issued session IDs (ADR-008)
+- Sends go only to destinations the user named; tool content never chooses one (ADR-009)
 
 The optional work-tool setup now includes Gmail read/send, Jira and GitHub checks, six UI prompts, and deterministic source-to-sink replays. See the [work-channel runbook](demo/DEMO_RUNBOOK.md#work-channel-beats-and-deterministic-fallback-204208). `make eval-live-dry` previews the constrained real-model check; `make eval-live` writes a separate three-seed result, never executing tools. The [complete 58-scenario matrix](docs/results/protection-combinations.md#complete-58-scenario-rerun-2026-10-31) archives 4,032 turn records. The separate [real-account rehearsal](docs/results/work-tools-live.md) records successful Gmail sends and substantial benign read false positives; the [constrained probe](docs/results/protection-combinations.md#real-model-probe-199-part-4) distinguishes gateway prevention from model non-generation.

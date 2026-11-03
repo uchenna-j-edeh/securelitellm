@@ -224,7 +224,7 @@ def resolved_controls(controls: str) -> Controls:
 
 def conditions_csv(controls: Controls) -> Path:
     """results_classifier-on_allowlist-off.csv for one combination of switches."""
-    slug = "_".join(f"{name}-{value}" for name, value in controls.summary().items())
+    slug = controls.label().replace("=", "-").replace(",", "_")
     return RESULTS_DIR / f"results_{slug}.csv"
 
 
