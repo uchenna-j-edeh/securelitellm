@@ -33,6 +33,7 @@ import json
 import os
 import re
 import smtplib
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -46,7 +47,10 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from demo import github_issues, google_mail, jira
+# `make demo-tools` runs this file as a script, which puts demo/ (not the repo
+# root) on sys.path; add the root so the demo package imports, as server.py does.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from demo import github_issues, google_mail, jira  # noqa: E402
 
 DEMO_DIR = Path(__file__).parent
 WORKSPACE = DEMO_DIR / "workspace"
