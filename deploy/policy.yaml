@@ -18,9 +18,13 @@
 #               off: provenance only — every untrusted tool result counts as untrusted.
 #   allowlist   on:  every send destination must be in allowed_destinations below (#167).
 #               off: destinations are not checked.
+#   user_named  on:  every send destination must appear in the user's message for
+#                    that turn (#212), so tool content can't choose a send.
+#               off: not checked.
 controls:
   classifier: on
   allowlist: off
+  user_named: off
 
 # Where sends may go when allowlist is on (#167). Every destination in a send
 # is checked: email to/cc/bcc, URLs, webhooks, Slack channels, recipients. A
@@ -42,6 +46,13 @@ allowed_destinations:
   - "ops@example.com"
   - "#team-reports"
   - "https://reports.example.com"
+
+# The user's own destinations (#212). With user_named on, a send here counts as
+# named by the user in every turn ("email me a summary"): sending to yourself
+# isn't exfiltration. Same entry forms as allowed_destinations; validated at
+# startup. With the allowlist on, these must be listed there too.
+own_destinations:
+  - "user@example.com"
 
 thresholds:
   elevated: 0.4
@@ -156,6 +167,14 @@ rules:
   - id: destination_not_allowed
     when:
       destination_not_allowed: true
+    score: 0.75
+
+  # user_named=on (#212): a send destination the user didn't type in this
+  # turn's message, i.e. one that came from a tool result or the model. Tool
+  # content can't decide that a send happens or where it goes: hold it.
+  - id: destination_not_user_named
+    when:
+      destination_not_user_named: true
     score: 0.75
 
   # L3 — tainted span hashes found inside a sink's arguments.

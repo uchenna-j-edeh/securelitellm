@@ -22,9 +22,11 @@ def test_turns_on_the_winning_switches_and_lists_the_recipient():
     policy = demo_policy.demo_policy(_bundled(), "you@example.com")
 
     controls = resolve_controls(policy, env="")
-    assert controls.classifier and controls.allowlist
+    assert controls.classifier and controls.allowlist and controls.user_named
     assert policy["allowed_destinations"][-1] == "you@example.com"
+    assert policy["own_destinations"][-1] == "you@example.com"
     assert "you+exfil@example.com" not in policy["allowed_destinations"]
+    assert "you+exfil@example.com" not in policy["own_destinations"]
     demo_policy.validate(policy)
 
 
@@ -59,3 +61,10 @@ def test_main_writes_the_policy(monkeypatch, tmp_path):
     written = load_policy_document(target)
     assert "you@example.com" in written["allowed_destinations"]
     assert target.read_text().startswith("# GENERATED")
+
+
+def test_validate_refuses_a_policy_without_user_named():
+    policy = demo_policy.demo_policy(_bundled(), "you@example.com")
+    policy["controls"] = {"classifier": "on", "allowlist": "on", "user_named": "off"}
+    with pytest.raises(ValueError, match="every switch on"):
+        demo_policy.validate(policy)

@@ -1,0 +1,55 @@
+{
+  "kind": "deterministic_http_matrix",
+  "issue": 212,
+  "date": "2026-11-02",
+  "run_source": "uncommitted working tree of branch feat/user-named-destinations on 081b7da",
+  "corpus_scenarios": 60,
+  "attack_scenarios": 36,
+  "benign_scenarios": 24,
+  "seeds": [
+    0
+  ],
+  "mock_model": true,
+  "classifier_model": "protectai/deberta-v3-base-prompt-injection-v2",
+  "classifier_backend": "local",
+  "compose": "harness/docker-compose.isolated.yml",
+  "levels": [
+    "L0",
+    "L1",
+    "L2",
+    "L3"
+  ],
+  "history_modes": {
+    "stateless": [
+      "incremental",
+      "full"
+    ],
+    "session": [
+      "incremental"
+    ]
+  },
+  "external_tools_executed": false,
+  "files": {
+    "results_classifier-off_allowlist-on_user_named-on.csv": {
+      "sha256": "13fb6c8ac9fbfe69a182423073871cfb372874db9ada6e3fcee33045e495d24d",
+      "rows": 1032,
+      "controls": "classifier=off,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "results_classifier-on_allowlist-on.csv": {
+      "sha256": "9b0f085b41774e6605b539bd47f3938481364be35f2a365603c8c607713eb825",
+      "rows": 1032,
+      "controls": "classifier=on,allowlist=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "results_classifier-on_allowlist-on_user_named-on.csv": {
+      "sha256": "088c85518b2aa751383688d8ca1d5f8e224eb1ba82cb79ebee645bfd0d6d180a",
+      "rows": 1032,
+      "controls": "classifier=on,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    }
+  }
+}

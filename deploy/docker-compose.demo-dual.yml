@@ -20,7 +20,7 @@
 #   stateless proxy  → http://localhost:4001
 #
 # Both proxies run deploy/policy.demo.yaml: the bundled policy with the winning
-# switches (classifier + allowlist) and this clone's demo recipient allowed.
+# switches (classifier + allowlist + user_named) and this clone's demo recipient allowed.
 # `make demo-dual-up` generates it (scripts/demo_policy.py).
 #
 # Both proxies use litellm_config.demo.yaml, where the quarantine model group

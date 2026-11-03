@@ -43,6 +43,12 @@ allowlisted destinations are instead trusted fully, the allowed-destination
 scenarios (sc-040–042, sc-044–049) are not exfiltration, and session memory adds no detection over stateless once the
 allowlist is on (see [`results/protection-combinations.md`](results/protection-combinations.md)).
 
+Decision (2026-11-02, #212): allowlisted recipients are trusted, but injected
+content must not reach them. Tool content can be what a send carries, but never
+decides that a send happens or where it goes. With `user_named` on, every send
+destination must also appear in the user's message for that turn
+([ADR-009](adr/ADR-009-user-named-destinations.md)).
+
 ## Out of Scope
 
 - Direct user prompt injection (user is trusted)
