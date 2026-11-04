@@ -1,0 +1,68 @@
+{
+  "kind": "deterministic_http_matrix",
+  "issue": null,
+  "date": "2026-11-04",
+  "dataset": "microsoft/llmail-inject-challenge",
+  "dataset_revision": "1063bdf01ec8762b812d5e06ee768a06faa5a6f7",
+  "dataset_license": "MIT",
+  "run_source": "uncommitted working tree on fd66839 (branch eval/llmail-inject-outside-attacks)",
+  "seeds": [
+    0
+  ],
+  "mock_model": true,
+  "classifier_model": "protectai/deberta-v3-base-prompt-injection-v2",
+  "classifier_backend": "local",
+  "compose": "harness/docker-compose.isolated.yml",
+  "configs": [
+    "session/L3"
+  ],
+  "history_modes": {
+    "session": [
+      "incremental"
+    ]
+  },
+  "external_tools_executed": false,
+  "regenerate": "uv run python scripts/import_llmail.py DATA_DIR; ... --retarget ops@example.com --out corpus/external/llmail-allowed --attacks 100 --benign 0; uv run python scripts/import_llmail_body.py DATA_DIR",
+  "files": {
+    "run1-recommended.csv": {
+      "sha256": "4bcdd99c18821cb9e34852300b30b147c3b3640c42617fdbaf0795e06e76c362",
+      "rows": 300,
+      "scenarios": "corpus/external/llmail (see scenarios_llmail.json)",
+      "controls": "classifier=on,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "run2-classifier-only.csv": {
+      "sha256": "f5c3a48e458f36fd67bad23f18d36342bcbdf722cffa2f22f0fe0f542f3adbbd",
+      "rows": 300,
+      "scenarios": "corpus/external/llmail (see scenarios_llmail.json)",
+      "controls": "classifier=on,allowlist=off",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "run3-retargeted-allowlist.csv": {
+      "sha256": "fe878316bc58aac737bc62b65f2c6eb8f033a8f17d9accac2c95223ade68454f",
+      "rows": 100,
+      "scenarios": "corpus/external/llmail-allowed (see scenarios_llmail-allowed.json)",
+      "controls": "classifier=on,allowlist=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "run4-body-content.csv": {
+      "sha256": "b6cbcd0351bdce2836a3f710178e86d82dae15570e883a8e4e40803ae0378223",
+      "rows": 201,
+      "scenarios": "corpus/external/llmail-body (see scenarios_llmail-body.json)",
+      "controls": "classifier=on,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "run5-body-content-classifier-off.csv": {
+      "sha256": "b5b1f7def517a31b022f10c70aaec39121a6ae5399eb93a9d7ebf18fa62b6f4e",
+      "rows": 201,
+      "scenarios": "corpus/external/llmail-body (see scenarios_llmail-body.json)",
+      "controls": "classifier=off,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    }
+  }
+}

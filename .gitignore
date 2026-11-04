@@ -35,3 +35,6 @@ progress-summary.md
 deploy/policy.demo.yaml
 # Gmail OAuth client and tokens (make gmail-auth)
 deploy/gmail_*.json
+
+# Generated from outside datasets (scripts/import_llmail.py); regenerate, do not commit
+corpus/external/

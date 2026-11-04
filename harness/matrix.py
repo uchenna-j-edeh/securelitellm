@@ -331,6 +331,19 @@ if __name__ == "__main__":
         help="write this run's CSVs into a separate directory",
     )
     parser.add_argument(
+        "--scenarios-dir",
+        type=Path,
+        default=SCENARIOS_DIR,
+        help="replay the scenarios in this directory instead of corpus/scenarios",
+    )
+    parser.add_argument(
+        "--config",
+        action="append",
+        default=[],
+        metavar="MODE/LEVEL",
+        help="run only this proxy config, e.g. session/L3 (repeatable; default all)",
+    )
+    parser.add_argument(
         "--controls",
         default="",
         help="override the policy's switches, e.g. classifier=off (#196)",
@@ -346,6 +359,17 @@ if __name__ == "__main__":
         if not path.is_file():
             parser.error(f"Compose file does not exist: {path}")
     RESULTS_DIR = args.results_dir.resolve()
+    SCENARIOS_DIR = args.scenarios_dir.resolve()
+    if args.config:
+        wanted = [tuple(c.split("/", 1)) for c in args.config]
+        unknown = [c for c, w in zip(args.config, wanted) if w not in CONFIGS]
+        if unknown:
+            parser.error(
+                f"Unknown --config {unknown}; choose from {[f'{m}/{lv}' for m, lv in CONFIGS]}"
+            )
+        CONFIGS = [c for c in CONFIGS if c in wanted]
+    if not any(SCENARIOS_DIR.glob("*.yaml")):
+        parser.error(f"No scenarios found in {SCENARIOS_DIR}")
     RESULTS_CSV = RESULTS_DIR / "results.csv"
     if args.conditions:
         run_conditions(n_seeds=args.seeds, dry_run=args.dry_run)
