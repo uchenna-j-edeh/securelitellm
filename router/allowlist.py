@@ -1,8 +1,10 @@
 """Destination allowlist (#167): every place a send goes must be listed.
 
 Applies to sends: tools in the "exfil" category (email, HTTP posts,
-webhooks, messages) and tools of unknown capability, which already count as
-sinks so a new tool name fails closed. Writes and reads are out of scope for
+webhooks, messages), tools of unknown capability, which already count as
+sinks so a new tool name fails closed, and read-named tools that request a
+URL ("network", #218): every URL such a call requests is checked by host,
+whatever the argument is called. Writes and other reads are out of scope for
 now (#93).
 
 Every destination in a send's arguments is checked, wherever it came from:
@@ -46,6 +48,8 @@ from dataclasses import dataclass
 from email.utils import getaddresses
 from typing import Any, Iterator
 from urllib.parse import urlsplit
+
+from router.taint import network_targets
 
 # Argument names that hold a destination. Values may be a string (comma or
 # semicolon separated) or a list of strings.
@@ -171,9 +175,13 @@ class Allowlist:
         """Labels of every destination in *sinks* that is not allowlisted, sorted."""
         refused: set[str] = set()
         for sink in sinks:
-            if sink.get("category") not in ("exfil", "other"):
+            category = sink.get("category")
+            if category not in ("exfil", "other", "network"):
                 continue
-            found = list(destinations(sink.get("_arguments", "")))
+            if category == "network":
+                found = network_targets(sink.get("_arguments", ""))  # every URL it requests
+            else:
+                found = list(destinations(sink.get("_arguments", "")))
             if not found:
                 refused.add(NO_DESTINATION)
             for destination in found:

@@ -15,12 +15,15 @@ Trust tiers (L1):
 Sink categories:
   "exfil"  — can transmit data externally (email, webhook, HTTP)
   "write"  — can persist data (file, database)
+  "network" — a read-named tool whose arguments hold a URL or host (#218);
+               requesting a URL sends it, so it is checked like a send
   "read"   — read-only; not an exfil risk
   "other"  — unknown capability
 """
 
 import hashlib
 import json
+import re
 from typing import Any, Iterator
 
 # Known sink function-name prefixes/substrings → category.
@@ -74,6 +77,78 @@ def _sink_category(fn_name: str) -> str:
     if any(name.startswith(pattern) or pattern in name for pattern in _READ_PATTERNS):
         return "read"
     return "other"
+
+
+# Argument names whose value is a network address even without a scheme
+# ("www.example.com/page"). Any argument holding a value with a scheme counts.
+_NETWORK_ARGS = frozenset(
+    {
+        "url",
+        "uri",
+        "link",
+        "href",
+        "endpoint",
+        "webhook",
+        "webhook_url",
+        "host",
+        "domain",
+        "website",
+    }
+)
+_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.-]*)://\S+$", re.IGNORECASE)
+_BARE_HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$", re.IGNORECASE)
+
+
+def network_targets(arguments: Any) -> list[str]:
+    """Every URL a tool call would request, read from its JSON arguments (#218).
+
+    A value with a scheme counts in any argument (``file://`` excepted: it is
+    local). A bare host ("www.example.com/page") counts only in a URL-type
+    argument, so a file name like "report.pdf" is not mistaken for a host.
+    Bare hosts come back with ``http://`` so they parse as URLs. Where the URL
+    came from doesn't matter here; the destination checks decide that.
+    """
+    if not isinstance(arguments, str) or not arguments or _exceeds_depth(arguments):
+        return []
+    try:
+        args = json.loads(arguments)
+    except (ValueError, RecursionError):
+        return []
+    targets: list[str] = []
+    for name, value in _iter_named_strings(args):
+        value = value.strip()
+        scheme = _SCHEME_RE.match(value)
+        if scheme:
+            if scheme.group(1).lower() != "file":
+                targets.append(value)
+        elif name in _NETWORK_ARGS and _BARE_HOST_RE.match(value):
+            targets.append("http://" + value)
+    return targets
+
+
+def _iter_named_strings(value: Any, name: str = "") -> Iterator[tuple[str, str]]:
+    """(argument name, string) pairs from decoded JSON; list items keep the list's name."""
+    if isinstance(value, str):
+        yield name, value
+    elif isinstance(value, dict):
+        for key, nested in value.items():
+            yield from _iter_named_strings(nested, str(key).lower())
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _iter_named_strings(nested, name)
+
+
+def sink_category(fn_name: str, arguments: Any = None) -> str:
+    """The category of a tool call, from its name and, for reads, its arguments.
+
+    A read-named tool that requests a URL is "network": fetching a URL the
+    model chose can carry data out in the URL itself, and confirms to whoever
+    owns the host that the agent obeyed. The name alone can't make it safe.
+    """
+    category = _sink_category(fn_name)
+    if category == "read" and network_targets(arguments):
+        return "network"
+    return category
 
 
 def _sink_result_ids(messages: list[dict[str, Any]]) -> set[str]:
@@ -203,8 +278,9 @@ def is_trusted_source(source: dict[str, Any]) -> bool:
 def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Extract assistant tool calls that can write, transmit, or have unknown capability.
 
-    Known read-only tools are deliberately excluded. Unknown tools remain sinks so
-    a new or misspelled function name fails closed instead of bypassing policy.
+    Known read-only tools are deliberately excluded, unless the call requests a
+    URL ("network", #218). Unknown tools remain sinks so a new or misspelled
+    function name fails closed instead of bypassing policy.
     """
     sinks = []
     for msg in messages:
@@ -213,7 +289,7 @@ def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for call in msg.get("tool_calls") or []:
             fn = call.get("function", {})
             name = fn.get("name", "")
-            category = _sink_category(name)
+            category = sink_category(name, fn.get("arguments"))
             if category == "read":
                 continue
             sinks.append(
