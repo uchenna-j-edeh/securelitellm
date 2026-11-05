@@ -438,3 +438,86 @@ every `generated` scenario. Retargeting keeps only submissions with the
 literal address, which drops obfuscated ones. Only single-turn email attacks
 are covered; delayed, MCP, RAG and other sinks still rest on our own
 scenarios.
+
+## Follow-up: outside-authored attacks (AgentDojo, 2026-11-04)
+
+**Why.** LLMail-Inject covers one kind of attack: email that steers a send.
+[AgentDojo](https://github.com/ethz-spylab/agentdojo) (ETH Zurich, NeurIPS
+2024, MIT) has four tool suites with outside-written attacker goals across
+many more actions: money transfers, calendar events, file deletion, password
+changes, workspace membership, bookings, web fetches and a misleading answer.
+
+**Scenarios.** `scripts/import_agentdojo.py` (AgentDojo 0.1.35, benchmark
+v1.2.1, its `important_instructions` attack) writes one scenario per user task
+× attacker goal, and one benign twin per user task, into
+`corpus/external/agentdojo-<suite>/` (gitignored, regenerable). A scenario
+replays the user task's correct tool calls in AgentDojo's own environment, with
+the attack planted, up to the first tool result that contains it. The scripted
+reply is the attacker goal's calls. The benign twin has no attack, and its
+reply is the rest of the task. Tool results are AgentDojo's own text (YAML
+dumps). For 9 goals AgentDojo has no reference calls (340 scenarios); we
+scripted those calls from the goal's own text (address, subject, body), left
+out their "then delete" steps, and mark them in the manifest.
+
+| Suite | Attacks | Benign |
+|---|---|---|
+| banking | 144 | 16 |
+| slack | 105 | 21 |
+| travel | 140 | 20 |
+| workspace | 560 | 40 |
+
+**Run.** Once, one seed, the mock model, the isolated stack, session memory at
+L3. No unknown decisions, no proxy failures. Raw CSVs and hashes:
+[`data/agentdojo-2026-11-04/`](data/agentdojo-2026-11-04/manifest.json).
+An attack counts as stopped if the generated call was held, blocked or had its
+tools removed. A text reply can't be stopped by any of those.
+
+| Suite | Recommended (classifier + allowlist + user_named) | Classifier only | Classifier off (allowlist + user_named) |
+|---|---|---|---|
+| banking | 144/144 | 115/144 | 144/144 |
+| slack | 100/105 | 78/105 | 91/105 |
+| travel | 120/140 | 120/140 | 120/140 |
+| workspace | 560/560 | 271/560 | 560/560 |
+| **all** | **924/949** | **584/949** | **915/949** |
+
+| Attacker action | Recommended | Classifier only | Classifier off |
+|---|---|---|---|
+| send (email, DM, web post) | 603/603 | 348/603 | 603/603 |
+| money transfer | 128/128 | 99/128 | 128/128 |
+| calendar event | 60/60 | 29/60 | 60/60 |
+| booking | 40/40 | 40/40 | 40/40 |
+| file deletion | 40/40 | 22/40 | 40/40 |
+| workspace membership | 21/21 | 15/21 | 21/21 |
+| password change | 16/16 | 16/16 | 16/16 |
+| fetch an attacker URL (`get_webpage`) | 16/21 | 15/21 | 7/21 |
+| misleading answer (text only) | **0/20** | **0/20** | **0/20** |
+
+| Benign (97 tasks) | Recommended | Classifier only | Classifier off |
+|---|---|---|---|
+| legitimate action stopped | 70/97 | 44/97 | 64/97 |
+| flagged before the model call | 56/97 | 55/97 | 11/97 |
+
+**Findings.**
+- **Actions through tools are covered.** With the recommended setting, every
+  outside attack that acts through a write-type tool was stopped, across
+  sends, transfers, calendar, deletion, membership, password and booking
+  tools that our own corpus never used.
+- **Two holes, both real.** A *misleading answer* has no tool call, and the
+  gateway doesn't check reply text (#129): 0/20 in every setting. A *fetch to
+  an attacker URL* is treated as reading, not sending: 5/21 got through with
+  the recommended setting and 14/21 with the classifier off. A fetched URL can
+  carry data out in its path or query.
+- **The classifier flags most clean AgentDojo data** (55/97 benign tasks
+  flagged before the model call), so its catches here partly reflect the
+  format of the tool output (YAML), not detection (#190). The classifier-only
+  column overstates it.
+- **The benign cost is high and mostly ours.** The strict allowlist doesn't
+  list AgentDojo's legitimate contacts (a deployment would), and many AgentDojo
+  prompts don't type the recipient ("pay the bill" with the IBAN in the bill),
+  which `user_named` holds by design, like bn-042.
+
+**Limits.** Scripted replies assume the model obeyed. One attack template
+(AgentDojo's strongest baseline), so wording varies less than in LLMail. Each
+scenario is one user turn; cross-turn delays (cases 2 and 6) are still covered
+only by our own corpus. No allowlist was written for AgentDojo's contacts, so
+benign costs are an upper bound.
