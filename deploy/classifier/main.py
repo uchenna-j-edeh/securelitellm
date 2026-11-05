@@ -7,8 +7,16 @@ changing CLASSIFIER_BACKEND without touching any Python code.
 Model is cached in /model_cache (mount a named volume there to persist
 across container restarts).
 
+Long texts: the model reads at most CLASSIFIER_MAX_LENGTH tokens (512), so a
+longer text is split into overlapping windows of that size
+(CLASSIFIER_WINDOW_OVERLAP tokens shared between neighbours, default 256) and
+every window is classified in one batch. The text is INJECTION if any window
+is; the score is that window's. Overlap means an injection shorter than the
+overlap is whole in at least one window, even where windows meet.
+
 Endpoints:
-  POST /classify   {"text": "..."} → {"label": "INJECTION"|"BENIGN", "score": 0.94}
+  POST /classify   {"text": "..."} → {"label": "INJECTION"|"BENIGN", "score": 0.94,
+                                      "windows": 1, ...}
   GET  /health     → {"status": "ok"} once model is loaded, 503 while loading
 """
 
@@ -22,6 +30,7 @@ from pydantic import BaseModel
 MODEL_ID = os.environ.get("CLASSIFIER_MODEL", "protectai/deberta-v3-base-prompt-injection-v2")
 CACHE_DIR = os.environ.get("TRANSFORMERS_CACHE", "/model_cache")
 MAX_LENGTH = int(os.environ.get("CLASSIFIER_MAX_LENGTH", "512"))
+WINDOW_OVERLAP = int(os.environ.get("CLASSIFIER_WINDOW_OVERLAP", "256"))
 
 app = FastAPI(title="local-classifier")
 
@@ -51,6 +60,45 @@ class ClassifyRequest(BaseModel):
     text: str
 
 
+def window_spans(n_tokens: int, size: int, overlap: int) -> list[tuple[int, int]]:
+    """[start, end) token spans of *size* that cover n_tokens, sharing *overlap*."""
+    if not 0 <= overlap < size:
+        raise ValueError("overlap must be at least 0 and smaller than the window size")
+    if n_tokens <= size:
+        return [(0, n_tokens)]
+    step = size - overlap
+    spans = []
+    start = 0
+    while True:
+        end = min(start + size, n_tokens)
+        spans.append((start, end))
+        if end == n_tokens:
+            return spans
+        start += step
+
+
+def split_windows(text: str, tokenizer, size: int, overlap: int) -> list[str]:
+    """The text cut into overlapping windows the model can read whole."""
+    # The model adds special tokens ([CLS], [SEP]) to each input.
+    body = size - tokenizer.num_special_tokens_to_add(pair=False)
+    enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    offsets = enc["offset_mapping"]
+    if len(offsets) <= body:
+        return [text]
+    return [
+        text[offsets[start][0] : offsets[end - 1][1]]
+        for start, end in window_spans(len(offsets), body, overlap)
+    ]
+
+
+def combine(results: list[dict]) -> tuple[str, float]:
+    """INJECTION if any window is, with the highest such score; else the least sure BENIGN."""
+    flagged = [r for r in results if "INJECTION" in r["label"].upper()]
+    if flagged:
+        return "INJECTION", max(float(r["score"]) for r in flagged)
+    return "BENIGN", min(float(r["score"]) for r in results)
+
+
 @app.post("/classify")
 def classify(req: ClassifyRequest) -> JSONResponse:
     if _pipe is None:
@@ -58,17 +106,17 @@ def classify(req: ClassifyRequest) -> JSONResponse:
         raise HTTPException(status_code=503, detail=detail)
 
     t0 = time.perf_counter()
-    result = _pipe(req.text, truncation=True, max_length=MAX_LENGTH)[0]
-    latency_ms = (time.perf_counter() - t0) * 1000
-
-    raw_label: str = result["label"].upper()
+    windows = split_windows(req.text, _pipe.tokenizer, MAX_LENGTH, WINDOW_OVERLAP)
+    results = _pipe(windows, truncation=True, max_length=MAX_LENGTH)
     # Normalise: model returns "INJECTION" or "SAFE" — map to our convention
-    label = "INJECTION" if "INJECTION" in raw_label else "BENIGN"
+    label, score = combine(results)
+    latency_ms = (time.perf_counter() - t0) * 1000
 
     return JSONResponse(
         {
             "label": label,
-            "score": round(float(result["score"]), 6),
+            "score": round(score, 6),
+            "windows": len(windows),
             "latency_ms": round(latency_ms, 3),
             "model": MODEL_ID,
         }

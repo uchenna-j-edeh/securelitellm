@@ -23,6 +23,7 @@ services:
     environment:
       - CLASSIFIER_MODEL=${CLASSIFIER_MODEL:-protectai/deberta-v3-base-prompt-injection-v2}
       - CLASSIFIER_MAX_LENGTH=${CLASSIFIER_MAX_LENGTH:-512}
+      - CLASSIFIER_WINDOW_OVERLAP=${CLASSIFIER_WINDOW_OVERLAP:-256}
     healthcheck:
       test: ["CMD", "python3", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
