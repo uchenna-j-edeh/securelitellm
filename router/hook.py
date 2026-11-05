@@ -832,7 +832,7 @@ def _extract_response_sinks(response: Any, include_reads: bool = False) -> list[
     as a sink with ``malformed`` set — even if its name looks like a read
     tool — so policy holds it rather than releasing it uninspected.
     """
-    from router.taint import _sink_category, tool_call_defect
+    from router.taint import sink_category, tool_call_defect
 
     sinks = []
     for choice in getattr(response, "choices", None) or []:
@@ -844,7 +844,7 @@ def _extract_response_sinks(response: Any, include_reads: bool = False) -> list[
             name = getattr(fn, "name", None)
             arguments = getattr(fn, "arguments", None)
             defect = tool_call_defect(name, arguments)
-            category = _sink_category(name) if isinstance(name, str) else "other"
+            category = sink_category(name, arguments) if isinstance(name, str) else "other"
             if category == "read" and defect is None and not include_reads:
                 continue
             arguments = arguments if isinstance(arguments, str) else ""
