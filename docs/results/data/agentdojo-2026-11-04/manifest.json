@@ -1,0 +1,120 @@
+{
+  "kind": "deterministic_http_matrix",
+  "date": "2026-11-04",
+  "dataset": "agentdojo",
+  "agentdojo_version": "0.1.35",
+  "benchmark_version": "v1.2.1",
+  "attack": "important_instructions",
+  "dataset_license": "MIT",
+  "run_source": "uncommitted working tree on 2753952, the pre-squash commit of #216 (same tree as 63e5c57)",
+  "seeds": [
+    0
+  ],
+  "mock_model": true,
+  "classifier_model": "protectai/deberta-v3-base-prompt-injection-v2",
+  "classifier_backend": "local",
+  "compose": "harness/docker-compose.isolated.yml",
+  "configs": [
+    "session/L3"
+  ],
+  "external_tools_executed": false,
+  "regenerate": "uv run --no-project --python 3.12 --with agentdojo==0.1.35 python scripts/import_agentdojo.py --out-root corpus/external",
+  "files": {
+    "banking-classifier-off.csv": {
+      "sha256": "beba8b4b6e2cbbc01cd6ca138be4ab0d556fed4d970c4eba34593397c6ca675e",
+      "rows": 160,
+      "suite": "banking",
+      "controls": "classifier=off,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "banking-classifier-only.csv": {
+      "sha256": "f57f87f756e583998e073e55774811d7c83ecf9f5545abb1575a291a0d2263be",
+      "rows": 160,
+      "suite": "banking",
+      "controls": "classifier=on,allowlist=off",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "banking-recommended.csv": {
+      "sha256": "f5c3ad2ab5e6e02bfd86228200adf04dc27cb7178fac36b211eec0545236c385",
+      "rows": 160,
+      "suite": "banking",
+      "controls": "classifier=on,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "slack-classifier-off.csv": {
+      "sha256": "ec219d5f6d7cd13cd391814f1330aeb6eaf6989d77450ffe25c69502ed07643f",
+      "rows": 126,
+      "suite": "slack",
+      "controls": "classifier=off,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "slack-classifier-only.csv": {
+      "sha256": "326ae8040274f141f5eb1b3bcca3e421ba262bf1fc4813be50c28ae658c87b51",
+      "rows": 126,
+      "suite": "slack",
+      "controls": "classifier=on,allowlist=off",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "slack-recommended.csv": {
+      "sha256": "9909662f084a9ddb8d3aea4fd5ad1d027c8ab5f14c13ab9b7e4d5b013a011524",
+      "rows": 126,
+      "suite": "slack",
+      "controls": "classifier=on,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "travel-classifier-off.csv": {
+      "sha256": "48465dbb10318fa60bd959d90dfe4c1b70835a490ae59e4c62b31d35dac8bacc",
+      "rows": 160,
+      "suite": "travel",
+      "controls": "classifier=off,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "travel-classifier-only.csv": {
+      "sha256": "b38e186220f7937094bbb8c911913a84d0371e0d813b524d2134d1b8d5919728",
+      "rows": 160,
+      "suite": "travel",
+      "controls": "classifier=on,allowlist=off",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "travel-recommended.csv": {
+      "sha256": "8adb6f60826a6edbf2b947474e765573bddbdc88ecf2e17c8621daa38c278123",
+      "rows": 160,
+      "suite": "travel",
+      "controls": "classifier=on,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "workspace-classifier-off.csv": {
+      "sha256": "143c4ea8f0571281833edb07394c99404e20ed0259bd06764026492d5204306e",
+      "rows": 600,
+      "suite": "workspace",
+      "controls": "classifier=off,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "workspace-classifier-only.csv": {
+      "sha256": "b45b369c88a7f2ffcafffbbf162d39a23cf91741f88bfbd993fd34851b3aa39a",
+      "rows": 600,
+      "suite": "workspace",
+      "controls": "classifier=on,allowlist=off",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    },
+    "workspace-recommended.csv": {
+      "sha256": "513b45b69b18c9bbee5d2c62fdf2daaa2b323397f6a3cdb93870c095c207dce6",
+      "rows": 600,
+      "suite": "workspace",
+      "controls": "classifier=on,allowlist=on,user_named=on",
+      "unknown_decisions": 0,
+      "proxy_http_failures": 0
+    }
+  }
+}
