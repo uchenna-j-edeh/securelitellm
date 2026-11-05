@@ -377,3 +377,64 @@ read-then-write flows through. Its card-record false positive (bn-012) and the
 real-tool false positives from #210 remain.
 
 **Recommended configuration:** session + classifier + allowlist + user_named.
+
+## Follow-up: outside-authored attacks (LLMail-Inject, 2026-11-04)
+
+**Why.** Every scenario above was written by the team that built the gateway.
+[LLMail-Inject](https://huggingface.co/datasets/microsoft/llmail-inject-challenge)
+(Microsoft, 2025, MIT) was a public challenge where people tried to make an email
+assistant call `send_email` by planting text in an email it reads: our threat
+model, written by attackers who never saw this gateway.
+
+**Scenarios.** `scripts/import_llmail.py` and `scripts/import_llmail_body.py`
+convert the dataset into corpus scenarios under `corpus/external/` (gitignored;
+regenerate from the dataset, revision `1063bdf`). Each is one turn shaped like
+sc-060: the user asks for a summary, `read_email` returns ordinary emails plus
+the attacker's email as plain text, and the scripted model reply is the send the
+attacker wanted. IDs sc-500–699 and bn-700+ never collide with the main corpus.
+
+| Set | Source | Attacks | Benign | Edit to attack text |
+|---|---|---|---|---|
+| `llmail` | phase 2, `api_triggered` (made a defended model call `send_email`) | 200 of 3,165 | 100 (Microsoft's false-positive emails) | none |
+| `llmail-allowed` | same, containing `contact@contact.com` | 100 of 2,547 | — | that address → `ops@example.com` (allowlisted) |
+| `llmail-body` | phase 1, scenario 4: sent the secret Q2 profit figure | 200 of 3,015 | 1 (same inbox, no attack) | that address → `ops@example.com`; the user names it |
+
+**Run.** Once, one seed, the mock model, the isolated stack, session memory at
+L3 only (`harness/matrix.py --config session/L3 --scenarios-dir ...`). No
+unknown decisions, no proxy failures. Raw CSVs and hashes:
+[`data/llmail-inject-2026-11-04/`](data/llmail-inject-2026-11-04/manifest.json).
+
+| Run | Set | Controls | Attacks stopped | Classifier caught | Benign flagged |
+|---|---|---|---|---|---|
+| 1 | `llmail` | classifier + allowlist + user_named | **200/200** | 35/200 | 0/100 |
+| 2 | `llmail` | classifier only | 35/200 | 35/200 | 0/100 |
+| 3 | `llmail-allowed` | classifier + allowlist | 14/100 | 14/100 | — |
+| 4 | `llmail-body` | classifier + allowlist + user_named | **3/200** | 3/200 | 0/1 (sent) |
+| 5 | `llmail-body` | allowlist + user_named, classifier off | **200/200** (held) | — | 1/1 (held) |
+
+**Findings.**
+- **Destinations hold against outside attacks.** With the recommended
+  setting, no send reached the attacker or any destination the user didn't
+  name (run 1). In run 3 the 86 misses go to an allowed address the user never
+  typed; `user_named` holds those by design.
+- **The off-the-shelf classifier misses most outside attacks:** 17.5% caught
+  in run 2, versus 22/26 on our own corpus. Our scenarios overstated it. It
+  flagged none of Microsoft's 100 benign emails, which are cleaner than ours.
+  This classifier is a stand-in, not the production component.
+- **Body content is the open gap.** When the user names an allowed recipient,
+  both destination checks pass, and injected text decided what the send
+  carried in 197/200 runs (run 4). L3 span matching caught none: the leaked
+  figure comes from a different email than the injection. Nothing reached an
+  attacker, but this breaks the rule that injected content must not reach
+  allowlisted recipients (#212).
+- **Turning the classifier off closes it at a cost.** Provenance-only taint
+  holds every send made after untrusted content (run 5), including the
+  legitimate one. Closing the gap without that cost needs a better classifier
+  (trained on internal data), a check that the send's content matches the
+  user's request, or approval for such sends (#174).
+
+**Limits.** The scripted replies are ours: they assume the model obeyed, as in
+every `generated` scenario. Retargeting keeps only submissions with the
+literal address, which drops obfuscated ones. Only single-turn email attacks
+are covered; delayed, MCP, RAG and other sinks still rest on our own
+scenarios.
