@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DB_PASSWORD:?Missing database password}
+      POSTGRES_DB: litellm
+    volumes:
+      - atlassian_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  litellm:
+    environment:
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD}@postgres:5432/litellm
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Missing salt key}
+      PROXY_BASE_URL: http://localhost:4000
+      STORE_MODEL_IN_DB: "True"
+      UI_PASSWORD: ${UI_PASSWORD:?Missing UI password}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Missing Redis password}
+      REDIS_URL: redis://:$$REDIS_PASSWORD@redis:6379/0
+      SESSION_BACKEND: redis
+      
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+      image: redis:7.4-alpine
+      restart: unless-stopped
+      command:
+        - sh
+        - -c
+        - 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
+      environment:
+        REDIS_PASSWORD: ${REDIS_PASSWORD:?Missing Redis password}
+      volumes:
+        - securelitellm_redis_data:/data
+      healthcheck:
+        test:
+          - CMD-SHELL
+          - 'REDISCLI_AUTH="$${REDIS_PASSWORD}" redis-cli ping | grep -qx PONG'
+        interval: 5s
+        timeout: 5s
+        retries: 10
+        
+
+volumes:
+  atlassian_pgdata:
+
+  securelitellm_redis_data:

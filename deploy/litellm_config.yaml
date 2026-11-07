@@ -62,3 +62,12 @@ litellm_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+
+
+mcp_servers:
+  atlassian_mcp:
+    url: "https://mcp.atlassian.com/v2/mcp"
+    transport: "http"
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    description: "Atlassian Confluence MCP tools"
