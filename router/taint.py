@@ -15,8 +15,9 @@ Trust tiers (L1):
 Sink categories:
   "exfil"  — can transmit data externally (email, webhook, HTTP)
   "write"  — can persist data (file, database)
-  "network" — a read-named tool whose arguments hold a URL or host (#218);
-               requesting a URL sends it, so it is checked like a send
+  "network" — a read-named tool whose arguments name a destination: a URL or
+               host it requests, or an address or channel (#218). Checked
+               like a send.
   "read"   — read-only; not an exfil risk
   "other"  — unknown capability
 """
@@ -141,13 +142,20 @@ def _iter_named_strings(value: Any, name: str = "") -> Iterator[tuple[str, str]]
 def sink_category(fn_name: str, arguments: Any = None) -> str:
     """The category of a tool call, from its name and, for reads, its arguments.
 
-    A read-named tool that requests a URL is "network": fetching a URL the
-    model chose can carry data out in the URL itself, and confirms to whoever
-    owns the host that the agent obeyed. The name alone can't make it safe.
+    A read-named call that names a destination is "network": a URL it
+    requests (fetching a URL the model chose can carry data out in the URL
+    itself), or an address or channel in a destination argument (``to``,
+    ``recipient``, ``channel``, ...). The name alone can't make a call safe:
+    every destination in every call gets the destination checks. The name
+    still decides a call with no destination: a read runs, anything else is
+    held when the allowlist is on.
     """
     category = _sink_category(fn_name)
-    if category == "read" and network_targets(arguments):
-        return "network"
+    if category == "read":
+        from router.allowlist import call_destinations  # allowlist imports this module
+
+        if call_destinations(arguments):
+            return "network"
     return category
 
 

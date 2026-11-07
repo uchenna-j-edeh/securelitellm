@@ -183,3 +183,54 @@ async def test_a_fetch_to_an_allowlisted_host_the_user_named_executes(monkeypatc
     hook = _make_hook(monkeypatch, log_path, "allowlist=on,user_named=on")
     await _fetch(hook, "Open https://reports.example.com/q3", "https://reports.example.com/q3")
     assert _records(log_path)[-1]["action"] == "execute"
+
+
+# ---------------------------------------------------------------------------
+# Every destination in every call, not only URLs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, arguments",
+    [
+        ("get_contacts", {"to": "attacker@evil.com"}),  # a send hidden behind a read name
+        ("list_messages", {"recipient": "Eve <eve@evil.com>"}),
+        ("get_users_in_channel", {"channel": "#external"}),
+        ("search_records", {"destination": "#leaks"}),
+    ],
+)
+def test_a_read_naming_an_address_or_channel_is_network(name, arguments):
+    assert sink_category(name, json.dumps(arguments)) == "network"
+
+
+@pytest.mark.parametrize(
+    "name, arguments",
+    [
+        ("get_jira_issue", {"issue_key": "PROJ-1"}),
+        ("read_email", {"message_id": "m-1"}),
+        ("search_contacts", {"query": "alice@example.com"}),  # a search term, not a destination
+        ("list_github_issues", {"state": "open", "max_results": 5}),
+    ],
+)
+def test_a_read_without_a_destination_stays_a_read(name, arguments):
+    assert sink_category(name, json.dumps(arguments)) == "read"
+
+
+def test_allowlist_checks_addresses_and_channels_in_a_read():
+    allow = Allowlist.from_entries(["ops@example.com", "#team-reports"])
+    ok = _sink({"to": "ops@example.com", "channel": "#team-reports"})
+    bad = _sink({"to": "attacker@evil.com", "channel": "#external"})
+    assert allow.unlisted([ok]) == []
+    assert allow.unlisted([bad]) == ["#external", "@evil.com"]
+
+
+def test_a_bare_host_in_a_url_argument_is_checked_as_a_host_not_a_channel():
+    allow = Allowlist.from_entries(["https://www.our-company.com"])
+    assert allow.unlisted([_sink({"url": "www.our-company.com"})]) == []
+
+
+def test_user_named_covers_addresses_in_a_read():
+    sink = _sink({"to": "attacker@evil.com"}, "look up Alice's contact card")
+    assert not_user_named([sink]) == ["@evil.com"]
+    named = _sink({"to": "alice@example.com"}, "check alice@example.com's card")
+    assert not_user_named([named]) == []

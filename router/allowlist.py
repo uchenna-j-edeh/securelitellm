@@ -2,9 +2,10 @@
 
 Applies to sends: tools in the "exfil" category (email, HTTP posts,
 webhooks, messages), tools of unknown capability, which already count as
-sinks so a new tool name fails closed, and read-named tools that request a
-URL ("network", #218): every URL such a call requests is checked by host,
-whatever the argument is called. Writes and other reads are out of scope for
+sinks so a new tool name fails closed, and read-named tools that name a
+destination ("network", #218): every URL such a call requests, whatever the
+argument is called, and every address or channel in its destination
+arguments. Writes and other reads are out of scope for
 now (#93).
 
 Every destination in a send's arguments is checked, wherever it came from:
@@ -72,6 +73,9 @@ DESTINATION_ARGS = frozenset(
         "target",
     }
 )
+
+# Destination arguments that hold a URL; call_destinations reads them as URLs.
+_URL_ARGS = frozenset({"url", "uri", "endpoint", "webhook", "webhook_url"})
 
 NO_DESTINATION = "(no destination)"
 
@@ -179,7 +183,7 @@ class Allowlist:
             if category not in ("exfil", "other", "network"):
                 continue
             if category == "network":
-                found = network_targets(sink.get("_arguments", ""))  # every URL it requests
+                found = call_destinations(sink.get("_arguments", ""))
             else:
                 found = list(destinations(sink.get("_arguments", "")))
             if not found:
@@ -229,8 +233,8 @@ def latest_user_request(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
-def destinations(arguments: str) -> Iterator[str]:
-    """Every destination named in a tool call's JSON arguments."""
+def destinations(arguments: str, skip: frozenset[str] = frozenset()) -> Iterator[str]:
+    """Every destination named in a tool call's JSON arguments, except in *skip*."""
     try:
         args = json.loads(arguments) if arguments else {}
     except ValueError:
@@ -238,7 +242,7 @@ def destinations(arguments: str) -> Iterator[str]:
     if not isinstance(args, dict):
         return
     for name, value in args.items():
-        if str(name).lower() not in DESTINATION_ARGS:
+        if str(name).lower() not in DESTINATION_ARGS or str(name).lower() in skip:
             continue
         values = value if isinstance(value, list) else [value]
         for item in values:
@@ -251,6 +255,21 @@ def destinations(arguments: str) -> Iterator[str]:
             else:
                 parts = item.replace(";", ",").split(",")  # "#a, #b"
             yield from (part.strip() for part in parts if part.strip())
+
+
+def call_destinations(arguments: Any) -> list[str]:
+    """Every destination a read-named call names (#218): the URLs it requests,
+    from any argument, and the addresses and channels in its destination
+    arguments. URL-type arguments are read only as URLs, so a bare host
+    ("www.example.com/page") is checked as a host, not as a channel.
+    """
+    if not isinstance(arguments, str):
+        return []
+    found = network_targets(arguments)
+    for value in destinations(arguments, skip=_URL_ARGS):
+        if not _is_url(value):
+            found.append(value)
+    return found
 
 
 def sinks_with_arguments(
