@@ -30,6 +30,25 @@ def test_turns_on_the_winning_switches_and_lists_the_recipient():
     demo_policy.validate(policy)
 
 
+def test_the_beat_1_page_is_allowed():
+    """Beat 1 fetches https://httpbin.org/html; since #219 a fetch is checked like a send."""
+    import json
+
+    from router.allowlist import Allowlist, not_user_named
+    from router.taint import sink_category
+
+    policy = demo_policy.demo_policy(_bundled(), "you@example.com")
+    arguments = json.dumps({"url": "https://httpbin.org/html"})
+    sink = {
+        "category": sink_category("fetch_url", arguments),
+        "_arguments": arguments,
+        "_user_request": "Go to https://httpbin.org/html and summarise what the page says",
+    }
+    assert sink["category"] == "network"
+    assert Allowlist.from_entries(policy["allowed_destinations"]).unlisted([sink]) == []
+    assert not_user_named([sink]) == []
+
+
 def test_keeps_the_rest_of_the_bundled_policy():
     bundled = _bundled()
     policy = demo_policy.demo_policy(bundled, "you@example.com")
