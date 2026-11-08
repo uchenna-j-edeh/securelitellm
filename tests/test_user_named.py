@@ -42,8 +42,11 @@ def _sink(arguments, request, name="send_email", category="exfil"):
             "to alice@example.com and cc bob@example.com",
             {"to": "alice@example.com", "cc": ["bob@example.com"]},
         ),
-        ("upload to https://reports.example.com/ingest", {"url": "https://reports.example.com/x"}),
-        ("post it to reports.example.com", {"url": "https://reports.example.com/ingest"}),
+        (
+            "upload to https://reports.example.com/ingest",
+            {"url": "https://reports.example.com/ingest"},
+        ),
+        ("post it to reports.example.com/ingest", {"url": "http://reports.example.com/ingest"}),
         ("share it in #team-reports", {"channel": "#team-reports"}),
         ("share it in #team-reports", {"channel": "team-reports"}),
     ],
@@ -116,7 +119,7 @@ def test_named_in_collects_each_kind():
         "Mail Ann@X.io, post to https://api.partner.com/v2 and reports.example.com, then #Team."
     )
     assert named.addresses == {"ann@x.io"}
-    assert named.hosts == {"api.partner.com", "reports.example.com"}
+    assert named.urls == {"https://api.partner.com/v2", "http://reports.example.com/"}
     assert named.channels == {"#team"}
 
 

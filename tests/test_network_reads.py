@@ -111,14 +111,14 @@ def _sink(arguments, request=""):
 
 
 def test_allowlist_checks_the_host_of_a_network_read():
-    allow = Allowlist.from_entries(["https://reports.example.com"])
-    assert allow.unlisted([_sink({"url": "https://reports.example.com/q3"})]) == []
+    allow = Allowlist.from_entries(["https://reports.example.com/ingest"])
+    assert allow.unlisted([_sink({"url": "https://reports.example.com/ingest"})]) == []
     assert allow.unlisted([_sink({"url": ATTACKER})]) == [ATTACKER]
 
 
 def test_allowlist_checks_a_url_in_any_argument():
-    allow = Allowlist.from_entries(["https://reports.example.com"])
-    sink = _sink({"url": "https://reports.example.com", "next": "https://evil.example/x"})
+    allow = Allowlist.from_entries(["https://reports.example.com/ingest"])
+    sink = _sink({"url": "https://reports.example.com/ingest", "next": "https://evil.example/x"})
     assert allow.unlisted([sink]) == ["evil.example"]
 
 
@@ -181,7 +181,9 @@ async def test_user_named_alone_holds_the_fetch(monkeypatch, log_path):
 @pytest.mark.asyncio
 async def test_a_fetch_to_an_allowlisted_host_the_user_named_executes(monkeypatch, log_path):
     hook = _make_hook(monkeypatch, log_path, "allowlist=on,user_named=on")
-    await _fetch(hook, "Open https://reports.example.com/q3", "https://reports.example.com/q3")
+    await _fetch(
+        hook, "Open https://reports.example.com/ingest", "https://reports.example.com/ingest"
+    )
     assert _records(log_path)[-1]["action"] == "execute"
 
 
@@ -225,7 +227,7 @@ def test_allowlist_checks_addresses_and_channels_in_a_read():
 
 
 def test_a_bare_host_in_a_url_argument_is_checked_as_a_host_not_a_channel():
-    allow = Allowlist.from_entries(["https://www.our-company.com"])
+    allow = Allowlist.from_entries(["http://www.our-company.com/"])
     assert allow.unlisted([_sink({"url": "www.our-company.com"})]) == []
 
 

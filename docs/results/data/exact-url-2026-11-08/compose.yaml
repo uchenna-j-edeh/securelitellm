@@ -1,0 +1,49 @@
+services:
+  baseline:
+    image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
+    ports:
+    - 127.0.0.1:14020:4000
+    volumes:
+    - ./config.mock.yaml:/app/config.yaml:ro
+    - ${EXACT218_BASELINE}/router:/workspace/router:ro
+    - ${EXACT218_BASELINE}/deploy/policy.yaml:/workspace/deploy/policy.yaml:ro
+    - ${EXACT218_RUNTIME}/baseline/logs:/logs
+    command: --config /app/config.yaml --port 4000
+    environment:
+      LITELLM_MASTER_KEY: sk-exact218-eval-only
+      PYTHONPATH: /workspace
+      ROUTER_MODE: session
+      ROUTER_LEVEL: L3
+      ROUTER_ENFORCE: 'true'
+      ROUTER_LOG_PATH: /logs/decisions.jsonl
+      CLASSIFIER_BACKEND: local
+      LOCAL_CLASSIFIER_URL: http://host.docker.internal:8080
+      ROUTER_CONTROLS: classifier=on,allowlist=on,user_named=on
+      ROUTER_LITELLM_CONFIG: /app/config.yaml
+      POLICY_PATH: /workspace/deploy/policy.yaml
+  exact:
+    image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
+    ports:
+    - 127.0.0.1:14021:4000
+    volumes:
+    - ./config.mock.yaml:/app/config.yaml:ro
+    - ${EXACT218_REPO}/router:/workspace/router:ro
+    - ${EXACT218_REPO}/deploy/policy.yaml:/workspace/deploy/policy.yaml:ro
+    - ${EXACT218_RUNTIME}/exact/logs:/logs
+    command: --config /app/config.yaml --port 4000
+    environment:
+      LITELLM_MASTER_KEY: sk-exact218-eval-only
+      PYTHONPATH: /workspace
+      ROUTER_MODE: session
+      ROUTER_LEVEL: L3
+      ROUTER_ENFORCE: 'true'
+      ROUTER_LOG_PATH: /logs/decisions.jsonl
+      CLASSIFIER_BACKEND: local
+      LOCAL_CLASSIFIER_URL: http://host.docker.internal:8080
+      ROUTER_CONTROLS: classifier=on,allowlist=on,user_named=on
+      ROUTER_LITELLM_CONFIG: /app/config.yaml
+      POLICY_PATH: /workspace/deploy/policy.yaml
+  mock-model:
+    image: ${EXACT218_MOCK_IMAGE:-deploy-mock-model}
+    volumes:
+    - ${EXACT218_REPO}/deploy/mock_model/main.py:/app/main.py:ro

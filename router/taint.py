@@ -96,8 +96,7 @@ _NETWORK_ARGS = frozenset(
         "website",
     }
 )
-_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.-]*)://\S+$", re.IGNORECASE)
-_BARE_HOST_RE = re.compile(r"^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$", re.IGNORECASE)
+_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.-]*)://", re.IGNORECASE)
 
 
 def network_targets(arguments: Any) -> list[str]:
@@ -122,7 +121,9 @@ def network_targets(arguments: Any) -> list[str]:
         if scheme:
             if scheme.group(1).lower() != "file":
                 targets.append(value)
-        elif name in _NETWORK_ARGS and _BARE_HOST_RE.match(value):
+        elif name in _NETWORK_ARGS:
+            # A malformed URL must still reach authorization, where it fails
+            # closed; otherwise parser rejection would turn it into a safe read.
             targets.append("http://" + value)
     return targets
 

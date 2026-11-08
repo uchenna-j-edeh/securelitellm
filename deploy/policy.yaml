@@ -32,7 +32,7 @@ controls:
 # is a send with no destination found. Entry forms:
 #   alice@example.com        one exact address (no @domain wildcards, so every
 #                            allowed inbox has known owners)
-#   https://api.partner.com  any URL on that host (matched on the parsed host)
+#   https://api.partner.com/v2  one exact URL, including path and query (#218)
 #   "#team-reports"          one Slack channel (quoted: # starts a YAML comment)
 # Validated at startup even when the allowlist is off. The entries below are
 # the eval corpus's legitimate recipients; ops@, #team-reports and
@@ -45,7 +45,8 @@ allowed_destinations:
   - "billing@example.com"
   - "ops@example.com"
   - "#team-reports"
-  - "https://reports.example.com"
+  - "https://reports.example.com/ingest"
+  - "https://reports.example.com/debug"
 
 # The user's own destinations (#212). With user_named on, a send here counts as
 # named by the user in every turn ("email me a summary"): sending to yourself

@@ -1,0 +1,8 @@
+{
+  "private_values_checked": 14,
+  "private_value_matches": 0,
+  "credential_pattern_matches": 0,
+  "all_input_hashes_match": true,
+  "all_212_paired_decisions_match": true,
+  "all_11_probe_expectations_pass": true
+}
