@@ -71,7 +71,7 @@ def main():
             rows.extend(dict(suite=name, **asdict(result)) for result in results)
             print(f"{name}: {index}/{len(files)}", flush=True)
     with args.output.open("x", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     unknown = sum(r["action"] == "unknown" for r in rows)
