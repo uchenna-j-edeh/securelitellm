@@ -48,7 +48,7 @@ import re
 from dataclasses import dataclass
 from email.utils import getaddresses
 from typing import Any, Iterator
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from router.taint import network_targets
 
@@ -147,7 +147,8 @@ def normalize_url(value: str, *, explicit_path: bool = False) -> str | None:
 
     Policy URLs require an explicit path (use / for a root page). Bare tool/user
     URLs keep #219's http assumption; the scheme is never ignored. Query order,
-    repeated parameters, case, reserved escapes and /a versus /a/ stay distinct.
+    repeated parameters, case, reserved escapes, fragments and /a versus /a/
+    stay distinct.
     This changes only the comparison key, never the URL a tool will execute.
     """
     if (
@@ -181,9 +182,14 @@ def normalize_url(value: str, *, explicit_path: bool = False) -> str | None:
             authority += f":{port}"
         path = _remove_dot_segments(_percent_normalized(parsed.path or "/"))
         query = _percent_normalized(parsed.query)
-        normalized = urlunsplit((scheme, authority, path, query, ""))
-        if not query and "?" in value.split("#", 1)[0]:
-            normalized += "?"
+        fragment = _percent_normalized(parsed.fragment)
+        normalized = f"{scheme}://{authority}{path}"
+        if query or "?" in value.split("#", 1)[0]:
+            normalized += "?" + query
+        if "#" in value:
+            # Kept, not dropped: HTTP clients don't send it, but a tool that
+            # logs or forwards the raw URL would carry data placed there.
+            normalized += "#" + fragment
         return normalized
     except ValueError:
         return None
@@ -200,7 +206,10 @@ def _typed_url(value: str) -> str:
     return value
 
 
-def _typed_urls(text: str, pattern: re.Pattern) -> Iterator[str]:
+def _typed_urls(text: str, pattern: re.Pattern, scheme_less: bool = False) -> Iterator[str]:
+    """Normalized URLs typed in *text*. A scheme-less URL ("www.x.com/a") names
+    both its http and https forms: the user chose no scheme, and models usually
+    pick https. Policy entries still need an explicit scheme."""
     for match in pattern.finditer(text):
         value = match.group()
         # Backticks, quotes and angle brackets make terminal punctuation
@@ -210,6 +219,23 @@ def _typed_urls(text: str, pattern: re.Pattern) -> Iterator[str]:
         normalized = normalize_url(value)
         if normalized:
             yield normalized
+            if scheme_less and normalized.startswith("http://"):
+                yield "https://" + normalized[len("http://") :]
+
+
+# A host label fit for a decision record: DNS labels with at least one dot, or
+# an IP address. Anything else (free text from an argument) is not logged.
+_LOGGABLE_HOST_RE = re.compile(r"(?:[a-z0-9-]+\.)+[a-z0-9-]+|\[?[0-9a-f:.]+\]?")
+
+
+def _refusal_label(url: str) -> str:
+    """The host to name in a refusal, or a placeholder. Decision records keep
+    hosts only; a malformed URL argument such as "password=hunter2" must not
+    reach them as if it were a host."""
+    host = _host(url)
+    if host and _LOGGABLE_HOST_RE.fullmatch(host):
+        return host
+    return "(unparseable url)"
 
 
 @dataclass(frozen=True)
@@ -254,14 +280,14 @@ class Allowlist:
     def named_in(cls, text: str) -> Allowlist:
         """Destinations typed in *text*: exact addresses, complete URLs and #channels.
 
-        Scheme-less URLs assume http, as network_targets does (#219). A bare
-        host names only its root page; an email domain does not name a URL.
+        A scheme-less URL names its http and https forms; a bare host names
+        only its root page; an email domain does not name a URL.
         """
         # Read URLs before addresses: removing an email from a URL query would
         # falsely authorize a truncated URL the user never typed (#218).
         urls = set(_typed_urls(text, _URL_RE))
         rest = _URL_RE.sub(" ", text)
-        urls.update(_typed_urls(rest, _BARE_HOST_RE))
+        urls.update(_typed_urls(rest, _BARE_HOST_RE, scheme_less=True))
         rest = _BARE_HOST_RE.sub(" ", rest)
         addresses = {a.lower() for a in _EMAIL_RE.findall(rest)}
         rest = _EMAIL_RE.sub(" ", rest)
@@ -279,9 +305,8 @@ class Allowlist:
         """Labels for the parts of *destination* that are not allowed; empty if all are."""
         value = destination.strip()
         if _is_url(value):
-            host = _host(value)
             url = normalize_url(value)
-            return [] if url and url in self.urls else [host or "(unparseable url)"]
+            return [] if url and url in self.urls else [_refusal_label(value)]
         if "@" in value:
             # One or more addresses, with or without display names; the parser
             # returns the real address, e.g. attacker@evil.com from

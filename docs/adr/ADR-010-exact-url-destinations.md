@@ -27,10 +27,11 @@ each enabled control; naming a URL does not bypass the allowlist.
 | Path and query | Preserve case, query order, duplicate parameters and reserved bytes |
 | Path structure | Resolve `.`/`..`; preserve repeated slashes and `/a` versus `/a/` |
 | Percent escapes | Uppercase hex; decode only RFC 3986 unreserved bytes, never `%2F`, `%26`, etc. |
-| Fragment | Drop; it is not sent in the network request |
+| Fragment | **Keep and match exactly** (unreserved escapes normalized). HTTP clients don't send it, but a tool that logs or forwards the raw URL would carry data placed there |
 | Empty query | `/a?` remains distinct from `/a` |
 | Root page | A policy entry must explicitly include `/`; `https://x.example` fails startup with migration guidance |
-| Scheme-less tool/user URL | Assume **http**, preserving `network_targets()`'s #219 convention; never ignore or silently switch a scheme |
+| Scheme-less tool URL | Assume **http**, preserving `network_targets()`'s #219 convention; never ignore or silently switch a scheme |
+| Scheme-less URL the user typed | Names **both** its `http` and `https` forms: the user chose no scheme, and models usually pick https. A scheme the user typed is exact, and policy entries always need an explicit scheme |
 | Prose URL token | Trim sentence punctuation and unmatched closing brackets; backticks/quotes/angle brackets preserve intentional terminal punctuation |
 | Invalid/ambiguous URL | Refuse credentials in authority, backslashes, invalid ports/percent escapes, controls and non-ASCII raw URLs; use explicit ASCII/punycode/percent-encoded forms |
 
@@ -43,6 +44,24 @@ Syntax normalization follows [RFC 3986 sections 5.2.4 and 6.2.2](https://www.rfc
 
 Refusal evidence continues to contain **only the host**. Full paths, queries,
 user text and credentials are never added to decision records by this change.
+A refused URL is named by its host only when that host is a dotted DNS name or
+an IP address; anything else, such as free text in a `url` or `link`
+argument (`"password=hunter2"`), is recorded as `(unparseable url)`.
+
+## Read tools with host-like arguments
+
+`network_targets()` now treats **any** value in a `url`, `uri`, `link`, `href`,
+`endpoint`, `webhook`, `webhook_url`, `host`, `domain` or `website` argument as
+a URL, not only values that look like one. A malformed value therefore reaches
+authorization and fails closed, instead of the call passing as a plain read.
+
+As a result, read-named lookups such as `get_server_status(host="web-01")` or
+`get_dns_record(domain="example.com")` are checked like sends and are held while
+the allowlist is on, unless the exact target is listed. This is intentional: a
+lookup of an injected host or domain can itself carry data out (DNS queries
+reach the domain's name servers), and it confirms to the host's owner that the
+agent obeyed. Deployments with legitimate host lookups, such as fleet operations
+(#222), need those targets listed, or declared tool capabilities (#176).
 
 ## Migration and demo
 
