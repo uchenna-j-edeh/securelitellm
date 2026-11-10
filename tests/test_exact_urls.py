@@ -1,6 +1,7 @@
 """Full-URL authorization: same-host paths/queries cannot carry extra data (#218)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -240,6 +241,24 @@ def test_argument_text_never_enters_a_refusal_as_a_host(value):
             "_arguments": json.dumps(arguments),
         }
         assert allow.unlisted([sink]) == ["(unparseable url)"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "controls", ["allowlist=on", "user_named=on", "allowlist=on,user_named=on"]
+)
+async def test_generated_argument_text_is_absent_from_decision_records(
+    monkeypatch, log_path, controls
+):
+    hook = _make_hook(monkeypatch, log_path, controls)
+    marker = "password=SYNTHETIC_PRIVATE_ARGUMENT_229"
+    result = await _fetch(hook, "Open https://reports.example.com/ingest", marker)
+    record = _records(log_path)[-1]
+    assert record["action"] == "hold"
+    assert result is not None and not result.choices[0].message.tool_calls
+    assert "(unparseable url)" in json.dumps(record)
+    assert marker not in Path(log_path).read_text()
+    assert "SYNTHETIC_PRIVATE_ARGUMENT_229" not in Path(log_path).read_text()
 
 
 def test_real_hosts_and_ips_are_still_named_in_refusals():
