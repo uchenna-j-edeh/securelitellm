@@ -61,7 +61,7 @@ def test_entries_must_be_a_list():
         "Jane Roe <jane@example.com>",
         '"Doe, Jane" <jane@example.com>, ops@example.com',  # every recipient listed
         "https://api.partner.com/v2",  # exact endpoint
-        "https://API.partner.com:443/v2#section",
+        "https://API.partner.com:443/v2",  # case and default port normalized
         "#team",
         "team",  # Slack channel without '#'
     ],

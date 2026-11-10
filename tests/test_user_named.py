@@ -119,7 +119,12 @@ def test_named_in_collects_each_kind():
         "Mail Ann@X.io, post to https://api.partner.com/v2 and reports.example.com, then #Team."
     )
     assert named.addresses == {"ann@x.io"}
-    assert named.urls == {"https://api.partner.com/v2", "http://reports.example.com/"}
+    # A scheme-less host names its root page over http and https (#229 review).
+    assert named.urls == {
+        "https://api.partner.com/v2",
+        "http://reports.example.com/",
+        "https://reports.example.com/",
+    }
     assert named.channels == {"#team"}
 
 

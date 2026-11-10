@@ -1,0 +1,90 @@
+{
+  "external_tools_executed": false,
+  "probes_sha256": "31b38e867fa5638a82f1785b34557c8a29389786e64c29d19691a264a2c92b14",
+  "observations": [
+    {
+      "id": "normalization-without-fragment",
+      "released": true,
+      "finish_reason": "tool_calls",
+      "post_action": "execute",
+      "features": {
+        "untrusted_seen": false,
+        "sink_requested": true,
+        "source_ids": [],
+        "source_trust_tiers": {},
+        "tainted_spans_in_sink_args": false,
+        "streaming_tool_request": false,
+        "malformed_tool_call": false,
+        "destination_not_allowed": false,
+        "unlisted_destinations": [],
+        "destination_not_user_named": false,
+        "unnamed_destinations": []
+      }
+    },
+    {
+      "id": "free-argument-text",
+      "released": false,
+      "finish_reason": "content_filter",
+      "post_action": "hold",
+      "features": {
+        "untrusted_seen": false,
+        "sink_requested": true,
+        "source_ids": [],
+        "source_trust_tiers": {},
+        "tainted_spans_in_sink_args": false,
+        "streaming_tool_request": false,
+        "malformed_tool_call": false,
+        "destination_not_allowed": true,
+        "unlisted_destinations": [
+          "(unparseable url)"
+        ],
+        "destination_not_user_named": true,
+        "unnamed_destinations": [
+          "(unparseable url)"
+        ],
+        "escalation_count": 1
+      }
+    },
+    {
+      "id": "scheme-less-user-https",
+      "released": true,
+      "finish_reason": "tool_calls",
+      "post_action": "execute",
+      "features": {
+        "untrusted_seen": false,
+        "sink_requested": true,
+        "source_ids": [],
+        "source_trust_tiers": {},
+        "tainted_spans_in_sink_args": false,
+        "streaming_tool_request": false,
+        "malformed_tool_call": false,
+        "destination_not_allowed": false,
+        "unlisted_destinations": [],
+        "destination_not_user_named": false,
+        "unnamed_destinations": []
+      }
+    },
+    {
+      "id": "explicit-user-http-stays-exact",
+      "released": false,
+      "finish_reason": "content_filter",
+      "post_action": "hold",
+      "features": {
+        "untrusted_seen": false,
+        "sink_requested": true,
+        "source_ids": [],
+        "source_trust_tiers": {},
+        "tainted_spans_in_sink_args": false,
+        "streaming_tool_request": false,
+        "malformed_tool_call": false,
+        "destination_not_allowed": false,
+        "unlisted_destinations": [],
+        "destination_not_user_named": true,
+        "unnamed_destinations": [
+          "reports.example.com"
+        ],
+        "escalation_count": 1
+      }
+    }
+  ]
+}

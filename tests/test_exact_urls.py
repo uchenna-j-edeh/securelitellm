@@ -1,6 +1,7 @@
 """Full-URL authorization: same-host paths/queries cannot carry extra data (#218)."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -13,7 +14,7 @@ from tests.test_user_named import _data, _make_hook, _pre, _records
 @pytest.mark.parametrize(
     "url",
     [
-        "https://REPORTS.example.com:443/ingest#section",
+        "https://REPORTS.example.com:443/ingest",
         "https://reports.example.com/a/../ingest",
         "https://reports.example.com/a/%2e%2E/ingest",
         "https://reports.example.com/%69ngest",
@@ -33,6 +34,8 @@ def test_equivalent_endpoints_match(url):
         "https://reports.example.com/Ingest",
         "https://reports.example.com/ingest?q=SYNTHETIC_SECRET",
         "https://reports.example.com/ingest?",
+        "https://reports.example.com/ingest#SYNTHETIC_SECRET",
+        "https://reports.example.com/ingest#",
         "http://reports.example.com/ingest",
         "https://reports.example.com:444/ingest",
         "https://reports.example.com/ingest%2Fchild",
@@ -77,7 +80,7 @@ def test_root_page_is_explicit_and_never_a_host_wildcard():
 
 def test_query_order_multiplicity_values_and_reserved_bytes_are_exact():
     allow = Allowlist.from_entries(["https://reports.example.com/search?a=One&b=%2f"])
-    assert allow.refused("https://reports.example.com/search?a=%4Fne&b=%2F#tab") == []
+    assert allow.refused("https://reports.example.com/search?a=%4Fne&b=%2F") == []
     for query in ("b=%2F&a=One", "a=one&b=%2F", "a=One&a=One&b=%2F", "a=One&b=/", "a=One&b=%252F"):
         assert allow.refused("https://reports.example.com/search?" + query) == [
             "reports.example.com"
@@ -209,3 +212,98 @@ async def test_a_generated_malformed_url_is_held(monkeypatch, log_path):
         "https://reports.example.com/ingest?x=one\ntwo",
     )
     assert _records(log_path)[-1]["action"] == "hold"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes on #229
+# ---------------------------------------------------------------------------
+
+
+def test_a_fragment_must_match_exactly():
+    """Finding 4: a tool that logs or forwards the raw URL would carry it."""
+    allow = Allowlist.from_entries(["https://reports.example.com/docs#setup"])
+    assert allow.refused("https://reports.example.com/docs#setup") == []
+    assert allow.refused("https://reports.example.com/docs#%73etup") == []  # unreserved escape
+    for url in ("https://reports.example.com/docs", "https://reports.example.com/docs#d=secret"):
+        assert allow.refused(url) == ["reports.example.com"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["password=hunter2", "see the doc above", "hunter2", "SYNTHETIC_SECRET token"],
+)
+def test_argument_text_never_enters_a_refusal_as_a_host(value):
+    """Finding 1: decision records keep hosts only, never free argument text."""
+    allow = Allowlist.from_entries(["https://reports.example.com/ingest"])
+    for name, arguments in (("get_page", {"url": value}), ("list_links", {"link": value})):
+        sink = {
+            "category": sink_category(name, json.dumps(arguments)),
+            "_arguments": json.dumps(arguments),
+        }
+        assert allow.unlisted([sink]) == ["(unparseable url)"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "controls", ["allowlist=on", "user_named=on", "allowlist=on,user_named=on"]
+)
+async def test_generated_argument_text_is_absent_from_decision_records(
+    monkeypatch, log_path, controls
+):
+    hook = _make_hook(monkeypatch, log_path, controls)
+    marker = "password=SYNTHETIC_PRIVATE_ARGUMENT_229"
+    result = await _fetch(hook, "Open https://reports.example.com/ingest", marker)
+    record = _records(log_path)[-1]
+    assert record["action"] == "hold"
+    assert result is not None and not result.choices[0].message.tool_calls
+    assert "(unparseable url)" in json.dumps(record)
+    assert marker not in Path(log_path).read_text()
+    assert "SYNTHETIC_PRIVATE_ARGUMENT_229" not in Path(log_path).read_text()
+
+
+def test_real_hosts_and_ips_are_still_named_in_refusals():
+    allow = Allowlist.from_entries(["https://reports.example.com/ingest"])
+    assert allow.refused("https://evil.example/x?d=secret") == ["evil.example"]
+    assert allow.refused("http://10.0.0.5/x") == ["10.0.0.5"]
+
+
+@pytest.mark.parametrize(
+    "name, arguments",
+    [
+        ("get_server_status", {"host": "web-01"}),
+        ("get_dns_record", {"domain": "example.com"}),
+        ("list_links", {"website": "www.example.org"}),
+    ],
+)
+def test_reads_with_host_or_domain_arguments_are_always_checked(name, arguments):
+    """Finding 2 (documented in ADR-010): any value in a host/domain/link/website
+    argument is checked, so a lookup can't reach an injected host unchecked."""
+    allow = Allowlist.from_entries(["https://reports.example.com/ingest"])
+    sink = {
+        "category": sink_category(name, json.dumps(arguments)),
+        "_arguments": json.dumps(arguments),
+    }
+    assert sink["category"] == "network"
+    assert allow.unlisted([sink]) != []
+
+
+def test_a_scheme_less_url_the_user_typed_names_https_too():
+    """Finding 3: the user chose no scheme; models usually pick https."""
+    text = "Post the hobbies to www.our-company.com/hobbies"
+    for url in ("https://www.our-company.com/hobbies", "http://www.our-company.com/hobbies"):
+        assert not_user_named([_sink({"url": url}, text)]) == []
+    assert not_user_named([_sink({"url": "https://www.our-company.com/other"}, text)]) == [
+        "www.our-company.com"
+    ]
+
+
+def test_a_typed_scheme_is_still_exact():
+    text = "Post to http://www.our-company.com/hobbies"
+    assert not_user_named([_sink({"url": "https://www.our-company.com/hobbies"}, text)]) == [
+        "www.our-company.com"
+    ]
+
+
+def test_policy_entries_still_need_their_scheme():
+    allow = Allowlist.from_entries(["http://reports.example.com/ingest"])
+    assert allow.refused("https://reports.example.com/ingest") == ["reports.example.com"]

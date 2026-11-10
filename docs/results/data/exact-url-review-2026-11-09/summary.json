@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-09",
+  "timezone": "America/New_York",
+  "base_commit": "457f7274f1e233d09c64053d7264beec07cc28a1",
+  "review_fixes_commit": "717b8e229ec42909fa1a293f8262808bd4a2a33f",
+  "mode": "session",
+  "level": "L3",
+  "controls": "classifier=on,allowlist=on,user_named=on",
+  "seed": 0,
+  "external_tools_executed": false,
+  "paired_rows": 212,
+  "total_replay_rows": 424,
+  "compared_fields": [
+    "action",
+    "risk_level",
+    "route",
+    "post_action",
+    "post_risk_level",
+    "post_route",
+    "outcome",
+    "data_class",
+    "matched_rules"
+  ],
+  "replay_changes": [],
+  "input_hashes_equal": true,
+  "scripted_generation_canaries_passed": true,
+  "unknown_decisions": 0,
+  "proxy_http_failures": 0,
+  "frozen_probe_input_unchanged": true,
+  "frozen_probe_changes": [
+    {
+      "id": "normalized-equivalent",
+      "before": "released",
+      "after": "held"
+    }
+  ],
+  "review_probe_count": 4,
+  "argument_text_redacted": true,
+  "all_fixed_probe_expectations_pass": true,
+  "source_sha256": {
+    "router/allowlist.py": "b3ed885cda07de33e59fedf9509779eb3f6808784d6050606114854f18d2fce0",
+    "router/taint.py": "6769573d156240f3ef140a08888889df00104998432202b861ddb8ad178bb96a",
+    "deploy/policy.yaml": "2fb771e5dfeb374026f64c63071769438c5032f54ebaac1e70bb816d3a526e3c",
+    "deploy/mock_model/main.py": "64e84b1a100c517aee5d0834d62243cd4548214a85ee7165dd30bc5ac60a6391"
+  }
+}

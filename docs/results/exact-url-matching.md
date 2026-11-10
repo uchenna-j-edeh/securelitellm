@@ -5,6 +5,11 @@ This is the exact-matching layer requested after #219/#221, not completion of
 the broader egress-provenance issue. See [ADR-010](../adr/ADR-010-exact-url-destinations.md)
 for normalization choices and configuration migration.
 
+The initial results below describe the November 8 implementation, before the
+four #229 review fixes. See [Review-fix rerun](#review-fix-rerun-2026-11-09) for
+the current fragment and scheme-less user-URL behavior. Historical evidence is
+preserved unchanged.
+
 ## Paired HTTP replay
 
 Baseline: `bce573c` (main including #219, #220 and #221), using the old host
@@ -77,6 +82,53 @@ address secrets in POST bodies or misleading text replies.
   instead of being misclassified as reads.
 - 1,020 non-E2E tests pass; the optional AgentDojo-import test is skipped in the
   main environment. Ruff lint and formatting pass. CI supplies the E2E check.
+
+## Review-fix rerun, 2026-11-09
+
+PR #229 had already been squash-merged as `457f727` without the requested
+review fixes. The follow-up includes reviewer commit `717b8e2` and compares
+that merged main tree with the corrected router. ADR-010 now documents all
+four findings: safe refusal labels, host-like read arguments failing closed,
+scheme-less user URLs naming both HTTP and HTTPS, and exact fragment matching.
+
+The same 60 core and 126 AgentDojo Slack scenarios produce **424 paired replay
+rows**, with no changes across the nine fields above, no unknown decisions or
+HTTP failures, identical input hashes and successful mock-generation canaries.
+This preserves the existing benign holds; it does not establish a low false
+positive rate. No external tools execute.
+
+All 11 original probe inputs, including their historical expectation fields,
+are preserved byte for byte. Ten results are unchanged. The frozen
+`normalized-equivalent` URL
+`https://REPORTS.example.com:443/a/../%69ngest#section` changes from released
+to held: the appended fragment no longer matches the authorized `/ingest`.
+The rerun verifier applies that one explicit expectation change rather than
+rewriting the original fixture.
+
+Four additional paired HTTP probes confirm:
+
+| Case | Merged #229 | With review fixes |
+|---|---|---|
+| Same normalized URL without `#section` | released | released |
+| Synthetic free argument text | held, argument text in evidence | held, `(unparseable url)` only |
+| Scheme-less user URL, generated HTTPS | held | released |
+| User explicitly typed HTTP, generated HTTPS | held | held |
+
+The privacy regression also checks complete decision logs for the absence of
+the synthetic argument marker with allowlist, user_named, and both controls.
+**1,037 non-E2E tests pass**, one optional AgentDojo test is skipped, and Ruff
+lint/format pass. CI supplies the cross-platform and E2E checks.
+
+Evidence and a service-free verifier are in
+[`data/exact-url-review-2026-11-09/`](data/exact-url-review-2026-11-09/summary.json).
+To reproduce, use the isolated stack below with `git archive 457f727` instead
+of `bce573c` for the baseline, and use new runtime/output directories. Run the
+rerun directory's `probe.py` for the frozen inputs and again with
+`--probes docs/results/data/exact-url-review-2026-11-09/review-probes.json`.
+Run the original `replay.py` for each arm, then run
+`python docs/results/data/exact-url-review-2026-11-09/verify.py` to verify the
+archived results without starting any services. The older summary and
+checksums continue to describe the initial November 8 run.
 
 ## Reproduction
 
