@@ -60,8 +60,8 @@ def test_entries_must_be_a_list():
         "boss@partner.com",  # exact address, case-insensitive
         "Jane Roe <jane@example.com>",
         '"Doe, Jane" <jane@example.com>, ops@example.com',  # every recipient listed
-        "https://api.partner.com/reports?id=1",  # any path on the host
-        "http://API.partner.com",
+        "https://api.partner.com/v2",  # exact endpoint
+        "https://API.partner.com:443/v2#section",
         "#team",
         "team",  # Slack channel without '#'
     ],

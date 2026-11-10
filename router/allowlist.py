@@ -10,14 +10,14 @@ now (#93).
 
 Every destination in a send's arguments is checked, wherever it came from:
 email to/cc/bcc (lists and display names included), URLs and endpoints
-(matched on the parsed host, never on text), Slack channels and message
+(matched as normalized complete URLs, including path and query), Slack channels and message
 recipients. There is no exception for a destination the user typed. A send
 with no destination found is not allowed (fail closed).
 
 Policy entries (``allowed_destinations:``):
 
   alice@example.com          one exact address
-  https://api.partner.com    any URL on that host (scheme and path ignored)
+  https://api.partner.com/v2 one exact URL (scheme, path and query included)
   #team-reports              one Slack channel
 
 Email entries are exact addresses only; ``@example.com`` is rejected. A domain
@@ -33,7 +33,7 @@ User-named destinations (#212, switch ``user_named``): a send may also be
 required to go only where the user asked. Each send is checked against the
 user message that started its turn (the latest user message before the
 assistant message that made the call). Every destination must appear there,
-matched exactly as above: the full email address, the URL host, or the exact
+matched exactly as above: the full email address, the complete URL, or the exact
 #channel. A destination that appears only in a tool result, or that the model
 chose, is not named, so tool content can't decide that a send happens or
 where it goes. An address the user named in an earlier turn doesn't count.
@@ -48,7 +48,7 @@ import re
 from dataclasses import dataclass
 from email.utils import getaddresses
 from typing import Any, Iterator
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from router.taint import network_targets
 
@@ -81,8 +81,10 @@ NO_DESTINATION = "(no destination)"
 
 # Destinations as a user types them in a message (#212).
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
-_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"']+")
-_BARE_HOST_RE = re.compile(r"(?<![\w@.-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![\w-])")
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"'`]+")
+_BARE_HOST_RE = re.compile(
+    r"(?<![\w@./:-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::\d+)?(?:[/?#][^\s<>\"'`]+)?(?![\w@:-])"
+)
 _CHANNEL_RE = re.compile(r"(?<![\w&#])#[A-Za-z0-9][\w-]*")
 
 
@@ -98,60 +100,178 @@ def _host(url: str) -> str | None:
     return host.rstrip(".").lower() if host else None
 
 
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+_DEFAULT_PORTS = {"http": 80, "https": 443, "ftp": 21, "ws": 80, "wss": 443}
+
+
+def _percent_normalized(component: str) -> str:
+    """RFC 3986: decode only unreserved bytes, never delimiters such as %2F."""
+
+    def replace(match: re.Match) -> str:
+        char = chr(int(match.group()[1:], 16))
+        return char if char in _UNRESERVED else match.group().upper()
+
+    return re.sub(r"%[0-9A-Fa-f]{2}", replace, component)
+
+
+def _remove_dot_segments(path: str) -> str:
+    """RFC 3986 section 5.2.4; retain repeated and trailing slashes."""
+    output = ""
+    while path:
+        if path.startswith("../"):
+            path = path[3:]
+        elif path.startswith("./"):
+            path = path[2:]
+        elif path.startswith("/./") or path == "/.":
+            path = path[2:] or "/"
+        elif path.startswith("/../") or path == "/..":
+            path = path[3:]
+            output = output.rsplit("/", 1)[0]
+            if not path:
+                path = "/"
+        elif path in (".", ".."):
+            path = ""
+        else:
+            end = path.find("/", 1 if path.startswith("/") else 0)
+            if end == -1:
+                output += path
+                path = ""
+            else:
+                output += path[:end]
+                path = path[end:]
+    return output
+
+
+def normalize_url(value: str, *, explicit_path: bool = False) -> str | None:
+    """Exact network URL key (#218), or None for ambiguous/malformed inputs.
+
+    Policy URLs require an explicit path (use / for a root page). Bare tool/user
+    URLs keep #219's http assumption; the scheme is never ignored. Query order,
+    repeated parameters, case, reserved escapes and /a versus /a/ stay distinct.
+    This changes only the comparison key, never the URL a tool will execute.
+    """
+    if (
+        not value
+        or any(ord(c) <= 32 or ord(c) >= 127 for c in value)
+        or any(c in value for c in '\\<>"`')
+    ):
+        return None
+    if re.search(r"%(?![0-9A-Fa-f]{2})", value):
+        return None
+    if not _is_url(value):
+        if not _BARE_HOST_RE.fullmatch(value):
+            return None
+        value = "http://" + value
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+        port = parsed.port  # validates range and syntax
+        if not host or parsed.username is not None or parsed.password is not None:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9.:-]+", host) or parsed.netloc.endswith(":"):
+            return None
+        if explicit_path and not parsed.path:
+            return None
+        scheme = parsed.scheme.lower()
+        host = host.lower().rstrip(".")
+        if not host:
+            return None
+        authority = f"[{host}]" if ":" in host else host
+        if port is not None and port != _DEFAULT_PORTS.get(scheme):
+            authority += f":{port}"
+        path = _remove_dot_segments(_percent_normalized(parsed.path or "/"))
+        query = _percent_normalized(parsed.query)
+        normalized = urlunsplit((scheme, authority, path, query, ""))
+        if not query and "?" in value.split("#", 1)[0]:
+            normalized += "?"
+        return normalized
+    except ValueError:
+        return None
+
+
+def _typed_url(value: str) -> str:
+    """Trim sentence punctuation and unmatched prose brackets from a bare token."""
+    value = value.rstrip(".,;!?")
+    while value and any(
+        value.endswith(end) and value.count(end) > value.count(start)
+        for start, end in (("(", ")"), ("[", "]"))
+    ):
+        value = value[:-1].rstrip(".,;!?")
+    return value
+
+
+def _typed_urls(text: str, pattern: re.Pattern) -> Iterator[str]:
+    for match in pattern.finditer(text):
+        value = match.group()
+        # Backticks, quotes and angle brackets make terminal punctuation
+        # intentional. URL regexes exclude quotes/brackets; strip backticks here.
+        quoted = match.start() > 0 and text[match.start() - 1] in "`\"'<"
+        value = value if quoted else _typed_url(value)
+        normalized = normalize_url(value)
+        if normalized:
+            yield normalized
+
+
 @dataclass(frozen=True)
 class Allowlist:
     addresses: frozenset[str]
-    hosts: frozenset[str]
+    urls: frozenset[str]
     channels: frozenset[str]
 
     @classmethod
     def from_entries(cls, entries: Any) -> Allowlist:
         if not isinstance(entries, list):
             raise ValueError("allowed_destinations must be a list")
-        addresses, hosts, channels = set(), set(), set()
+        addresses, urls, channels = set(), set(), set()
         for entry in entries:
             if not isinstance(entry, str) or not entry.strip():
                 raise ValueError(f"allowed_destinations: invalid entry {entry!r}")
-            value = entry.strip().lower()
+            value = entry.strip()
             if value.startswith("#") and len(value) > 1:
-                channels.add(value)
+                channels.add(value.lower())
             elif value.startswith("@"):
                 raise ValueError(
                     f"allowed_destinations: {entry!r} would allow every address at the domain; "
                     "list each address (e.g. alice{entry})"
                 )
             elif _is_url(value):
-                host = _host(value)
-                if not host:
-                    raise ValueError(f"allowed_destinations: no host in {entry!r}")
-                hosts.add(host)
+                url = normalize_url(value, explicit_path=True)
+                if not url:
+                    raise ValueError(
+                        "allowed_destinations: invalid URL or missing explicit path; "
+                        "list the exact endpoint (use / for the root page)"
+                    )
+                urls.add(url)
             elif value.count("@") == 1 and "." in value.split("@")[1]:
-                addresses.add(value)
+                addresses.add(value.lower())
             else:
                 raise ValueError(
                     f"allowed_destinations: {entry!r} is not an email address, URL or #channel"
                 )
-        return cls(frozenset(addresses), frozenset(hosts), frozenset(channels))
+        return cls(frozenset(addresses), frozenset(urls), frozenset(channels))
 
     @classmethod
     def named_in(cls, text: str) -> Allowlist:
-        """The destinations a user typed in *text*: exact addresses, URL hosts, #channels.
+        """Destinations typed in *text*: exact addresses, complete URLs and #channels.
 
-        A bare host ("reports.example.com") counts as the host; the domain of
-        an email address does not.
+        Scheme-less URLs assume http, as network_targets does (#219). A bare
+        host names only its root page; an email domain does not name a URL.
         """
-        addresses = {a.lower() for a in _EMAIL_RE.findall(text)}
-        rest = _EMAIL_RE.sub(" ", text)
-        hosts = {h for h in (_host(u) for u in _URL_RE.findall(rest)) if h}
-        rest = _URL_RE.sub(" ", rest)
-        hosts.update(h.lower() for h in _BARE_HOST_RE.findall(rest))
+        # Read URLs before addresses: removing an email from a URL query would
+        # falsely authorize a truncated URL the user never typed (#218).
+        urls = set(_typed_urls(text, _URL_RE))
+        rest = _URL_RE.sub(" ", text)
+        urls.update(_typed_urls(rest, _BARE_HOST_RE))
+        rest = _BARE_HOST_RE.sub(" ", rest)
+        addresses = {a.lower() for a in _EMAIL_RE.findall(rest)}
+        rest = _EMAIL_RE.sub(" ", rest)
         channels = {c.lower() for c in _CHANNEL_RE.findall(rest)}
-        return cls(frozenset(addresses), frozenset(hosts), frozenset(channels))
+        return cls(frozenset(addresses), frozenset(urls), frozenset(channels))
 
     def __or__(self, other: Allowlist) -> Allowlist:
         return Allowlist(
             self.addresses | other.addresses,
-            self.hosts | other.hosts,
+            self.urls | other.urls,
             self.channels | other.channels,
         )
 
@@ -160,7 +280,8 @@ class Allowlist:
         value = destination.strip()
         if _is_url(value):
             host = _host(value)
-            return [] if host in self.hosts else [host or "(unparseable url)"]
+            url = normalize_url(value)
+            return [] if url and url in self.urls else [host or "(unparseable url)"]
         if "@" in value:
             # One or more addresses, with or without display names; the parser
             # returns the real address, e.g. attacker@evil.com from
@@ -248,6 +369,10 @@ def destinations(arguments: str, skip: frozenset[str] = frozenset()) -> Iterator
         for item in values:
             if not isinstance(item, str):
                 continue
+            if str(name).lower() in _URL_ARGS and not _is_url(item):
+                # Same scheme assumption as network_targets; malformed URLs
+                # remain URL-shaped and fail closed, never become #channels.
+                item = "http://" + item.strip()
             if _is_url(item) or "@" in item:
                 # A URL is never split; an address list is parsed whole, so a
                 # display name with a comma ("Doe, Jane" <j@x.com>) stays intact.

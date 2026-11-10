@@ -1,0 +1,62 @@
+{
+  "date": "2026-11-08",
+  "base_commit": "bce573c",
+  "scope": "exact URL comparison layer of #218",
+  "controls": "classifier=on,allowlist=on,user_named=on",
+  "mode": "session",
+  "level": "L3",
+  "seed": 0,
+  "model": "local mock with current source mounted",
+  "classifier": "protectai/deberta-v3-base-prompt-injection-v2",
+  "classifier_revision": "90c9989b1a342275dd0d1a95aad283c04e075671",
+  "external_tools_executed": false,
+  "paired_rows": 212,
+  "total_replay_rows": 424,
+  "compared_fields": [
+    "action",
+    "risk_level",
+    "route",
+    "post_action",
+    "post_risk_level",
+    "post_route",
+    "outcome",
+    "data_class",
+    "matched_rules"
+  ],
+  "changes": [],
+  "suites": {
+    "core": {
+      "scenarios": 60,
+      "rows": 86,
+      "benign_scenarios": 24,
+      "new_decision_changes": 0
+    },
+    "agentdojo-slack": {
+      "scenarios": 126,
+      "rows": 126,
+      "benign_scenarios": 21,
+      "new_decision_changes": 0
+    }
+  },
+  "probe_rows": 22,
+  "unknown_decisions": 0,
+  "proxy_http_failures": 0,
+  "input_hashes_equal": true,
+  "scripted_generation_canaries_passed": true,
+  "newly_held_probes": [
+    "query-tampering",
+    "different-path",
+    "path-extension",
+    "scheme-change",
+    "port-change",
+    "malformed-url",
+    "dynamic-page"
+  ],
+  "source_sha256": {
+    "router/allowlist.py": "f89b2210c60ff004be60193b938823af3b6fc3a4bfcc8e43987a98429fae0eef",
+    "router/taint.py": "6769573d156240f3ef140a08888889df00104998432202b861ddb8ad178bb96a",
+    "deploy/policy.yaml": "2fb771e5dfeb374026f64c63071769438c5032f54ebaac1e70bb816d3a526e3c",
+    "scripts/demo_policy.py": "c4864b21ee0dff1dbe255bf272335aa121ef85db06845ebff8facae25d2fe49c",
+    "deploy/mock_model/main.py": "64e84b1a100c517aee5d0834d62243cd4548214a85ee7165dd30bc5ac60a6391"
+  }
+}

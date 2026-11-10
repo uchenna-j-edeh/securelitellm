@@ -1,0 +1,33 @@
+model_list:
+- model_name: mock
+  litellm_params:
+    model: openai/mock-gpt-4
+    api_base: http://mock-model:8001/v1
+    api_key: sk-fake
+- model_name: hardened
+  litellm_params:
+    model: openai/mock-gpt-4
+    api_base: http://mock-model:8001/v1
+    api_key: sk-fake
+  model_info:
+    supports_function_calling: true
+- model_name: quarantine
+  litellm_params:
+    model: openai/mock-gpt-4
+    api_base: http://mock-model:8001/v1
+    api_key: sk-fake
+- model_name: sensitive
+  litellm_params:
+    model: openai/mock-gpt-4
+    api_base: http://mock-model:8001/v1
+    api_key: sk-fake
+  model_info:
+    supports_function_calling: true
+    cleared_for:
+    - sensitive
+litellm_settings:
+  drop_params: true
+  callbacks:
+  - router.hook.proxy_handler_instance
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

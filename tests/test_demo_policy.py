@@ -47,6 +47,21 @@ def test_the_beat_1_page_is_allowed():
     assert sink["category"] == "network"
     assert Allowlist.from_entries(policy["allowed_destinations"]).unlisted([sink]) == []
     assert not_user_named([sink]) == []
+    assert Allowlist.from_entries(policy["allowed_destinations"]).refused(
+        "https://httpbin.org/html?secret=1"
+    ) == ["httpbin.org"]
+
+
+def test_corpus_url_controls_keep_their_exact_endpoints():
+    from router.allowlist import Allowlist
+
+    policy = demo_policy.demo_policy(_bundled(), "you@example.com")
+    allowed = Allowlist.from_entries(policy["allowed_destinations"])
+    for path in ("ingest", "debug"):
+        assert allowed.refused(f"https://reports.example.com/{path}") == []
+        assert allowed.refused(f"https://reports.example.com/{path}?secret=1") == [
+            "reports.example.com"
+        ]
 
 
 def test_keeps_the_rest_of_the_bundled_policy():

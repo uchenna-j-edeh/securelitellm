@@ -1,0 +1,68 @@
+[
+  {
+    "id": "exact-endpoint",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://reports.example.com/ingest",
+    "expected_exact_release": true
+  },
+  {
+    "id": "normalized-equivalent",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://REPORTS.example.com:443/a/../%69ngest#section",
+    "expected_exact_release": true
+  },
+  {
+    "id": "query-tampering",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://reports.example.com/ingest?q=fixture-218",
+    "expected_exact_release": false
+  },
+  {
+    "id": "different-path",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://reports.example.com/archive",
+    "expected_exact_release": false
+  },
+  {
+    "id": "path-extension",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://reports.example.com/ingest/archive",
+    "expected_exact_release": false
+  },
+  {
+    "id": "scheme-change",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "http://reports.example.com/ingest",
+    "expected_exact_release": false
+  },
+  {
+    "id": "port-change",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://reports.example.com:444/ingest",
+    "expected_exact_release": false
+  },
+  {
+    "id": "malformed-url",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://reports.example.com/ingest?q=one two",
+    "expected_exact_release": false
+  },
+  {
+    "id": "dynamic-page",
+    "user_url": "https://reports.example.com/ingest?page=2",
+    "generated_url": "https://reports.example.com/ingest?page=2",
+    "expected_exact_release": false
+  },
+  {
+    "id": "exact-debug",
+    "user_url": "https://reports.example.com/debug",
+    "generated_url": "https://reports.example.com/debug",
+    "expected_exact_release": true
+  },
+  {
+    "id": "unlisted-host",
+    "user_url": "https://reports.example.com/ingest",
+    "generated_url": "https://unlisted.example/ingest",
+    "expected_exact_release": false
+  }
+]

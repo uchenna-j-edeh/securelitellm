@@ -42,7 +42,7 @@ destinations the user typed.
    message in the request. An address named in an earlier turn doesn't count.
 2. **Exact matching,** as the allowlist does it (`router/allowlist.py`):
    - **email:** the full address, ignoring case;
-   - **URL:** the parsed host;
+   - **URL:** the complete normalized URL, including path/query (updated by ADR-010, #218);
    - **channel:** the exact `#channel`.
 
    Display-name tricks are resolved to the real address. Names and roles ("email
