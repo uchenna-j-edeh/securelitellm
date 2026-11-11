@@ -60,6 +60,16 @@ def parse_route_header(value: str | None) -> tuple[str, str] | None:
     return route.strip(), level.strip()
 
 
+def is_held(choice: dict) -> bool:
+    """True when the proxy held this turn's generated tool calls.
+
+    A held turn has ``finish_reason: content_filter`` and no ``tool_calls``; the
+    review notice in ``content`` is for people, not for parsing (#174).
+    """
+    message = choice.get("message") or {}
+    return choice.get("finish_reason") == "content_filter" and not message.get("tool_calls")
+
+
 def answered_by(model_name: str | None, api_base: str | None) -> dict | None:
     """The model that answered and whether it runs locally, from LiteLLM's headers.
 
@@ -184,8 +194,7 @@ def run_chat(
         content = message.get("content") or ""
         tool_calls = message.get("tool_calls") or []
 
-        # Detect strip-tools: proxy replaced tool calls with a hold notice
-        if "SecureLiteLLM held" in content:
+        if is_held(choice):
             yield _event("intercepted", action="strip-tools", message=content, session_ref=ref)
             return
 

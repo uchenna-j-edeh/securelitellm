@@ -61,3 +61,50 @@ def test_provider_format_errors_are_not_credited_as_interceptions(monkeypatch, m
     monkeypatch.setattr(agent, "call_tool", lambda *a, **kw: pytest.fail("No tool should execute"))
     events = list(agent.run_chat("Read the synthetic fixture", []))
     assert [event["kind"] for event in events] == [expected]
+
+
+@pytest.mark.parametrize(
+    "choice, held",
+    [
+        (
+            {
+                "finish_reason": "content_filter",
+                "message": {"content": "SecureLiteLLM held the generated tool call for review"},
+            },
+            True,
+        ),
+        ({"finish_reason": "content_filter", "message": {"content": "any wording"}}, True),
+        ({"finish_reason": "content_filter", "message": {"content": None, "tool_calls": []}}, True),
+        ({"finish_reason": "stop", "message": {"content": "SecureLiteLLM held nothing"}}, False),
+        (
+            {
+                "finish_reason": "tool_calls",
+                "message": {"content": None, "tool_calls": [{"id": "c1"}]},
+            },
+            False,
+        ),
+    ],
+)
+def test_is_held_reads_finish_reason_not_notice_text(choice, held):
+    from demo.agent import is_held
+
+    assert is_held(choice) is held
+
+
+def test_a_held_turn_is_reported_without_executing_tools(monkeypatch):
+    from demo import agent
+
+    body = {
+        "choices": [
+            {
+                "finish_reason": "content_filter",
+                "message": {"role": "assistant", "content": "held (risk=0.9; rules=exfil)"},
+            }
+        ]
+    }
+    monkeypatch.setattr(agent.httpx, "post", lambda *a, **kw: httpx.Response(200, json=body))
+    monkeypatch.setattr(agent, "call_tool", lambda *a, **kw: pytest.fail("No tool should execute"))
+    events = list(agent.run_chat("Send the report", []))
+    assert [event["kind"] for event in events] == ["intercepted"]
+    assert events[0]["action"] == "strip-tools"
+    assert events[0]["message"] == "held (risk=0.9; rules=exfil)"

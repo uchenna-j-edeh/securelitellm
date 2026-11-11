@@ -484,7 +484,10 @@ generated non-streaming tool calls again before returning them to the agent:
 
 - **execute** — the generated tool call is safe enough to return to the agent.
 - **hold** — the tool call is removed from the response and replaced with a
-  review notice; the agent cannot execute it automatically.
+  review notice; the agent cannot execute it automatically. A held turn is
+  a normal HTTP 200 whose choice has `finish_reason: "content_filter"`, no
+  `tool_calls`, and the notice in `content`. Agents should detect a hold from
+  `finish_reason`, not from the notice text, which may change.
 - **block** — a confirmed high-risk flow raises a policy error and the tool call
   is not returned.
 
