@@ -195,7 +195,7 @@ def run_chat(
         tool_calls = message.get("tool_calls") or []
 
         if is_held(choice):
-            yield _event("intercepted", action="strip-tools", message=content, session_ref=ref)
+            yield _event("intercepted", action="hold", message=content, session_ref=ref)
             return
 
         if tool_calls:
