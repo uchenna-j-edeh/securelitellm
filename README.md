@@ -68,7 +68,12 @@ set +a
 make lint test
 
 # 6. Start the stack (production-like)
+#    This starts with CLASSIFIER_BACKEND=none: plain chats work, but any request
+#    that carries tool results is rejected with HTTP 400 until a classifier is
+#    configured. See "Choosing a classifier backend" under Configuration.
 make up
+#    To run with the local DeBERTa classifier instead (~180 MB download on first start):
+#    make classifier-up
 
 # 7. Send a completion
 curl http://localhost:4000/chat/completions \
@@ -126,6 +131,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 The PowerShell helper mirrors the Makefile tasks and always passes the repository-root
 `.env` file to Docker Compose explicitly. Run `.\scripts\dev.ps1 help` to list tasks.
+
+Like `make up`, `.\scripts\dev.ps1 up` and `local-up` start with `CLASSIFIER_BACKEND=none`,
+so requests that carry tool results are rejected until a classifier is configured. See
+[Choosing a classifier backend](#choosing-a-classifier-backend).
 
 If Docker Desktop cannot start its Linux engine, the mock stack can run directly on
 Windows without Docker. This fallback uses the same locked Python environment and E2E
@@ -404,6 +413,21 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `CLASSIFIER_BACKEND` | `none` | `none`, `local`, `mock`, `promptguard`, `llmguard` |
 | `LOCAL_CLASSIFIER_URL` | `http://local-classifier:8080` | URL of the local classifier sidecar |
 | `CLASSIFIER_MODEL` | `protectai/deberta-v3-base-prompt-injection-v2` | any HuggingFace text-classification model |
+
+### Choosing a classifier backend
+
+The router sends every untrusted tool result to the injection classifier. While the
+classifier switch is on (the default), the router is fail-closed: a request that carries
+tool results is rejected with HTTP 400 if no classifier is configured (#76). This applies
+at every `ROUTER_LEVEL`.
+
+| Backend | When to use it | How to start it |
+|---|---|---|
+| `none` (default) | Trying the proxy with plain chats. Only structural checks run, and requests with tool results are rejected. `ROUTER_LOCK=true` refuses this setting | `make up` |
+| `mock` | CI and tests only. It returns a fixed answer without reading the content: `BENIGN` by default, so it never flags an injection (`MOCK_CLASSIFIER_LABEL=INJECTION` flags everything) | `make e2e-up` sets it |
+| `local` | Real use and evaluation. A self-hosted DeBERTa sidecar, so tool content stays on your machine | `make classifier-up` |
+| `promptguard` | PromptGuard 2 through Groq. Needs `GROQ_API_KEY`, and sends tool content to Groq, a third party (#101) | set `CLASSIFIER_BACKEND=promptguard` |
+| `llmguard` | LLM Guard, in-process. Needs `pip install llm-guard`, which is not in the locked dependencies | set `CLASSIFIER_BACKEND=llmguard` |
 
 ### Routing tiers
 
