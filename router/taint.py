@@ -140,18 +140,21 @@ def _iter_named_strings(value: Any, name: str = "") -> Iterator[tuple[str, str]]
             yield from _iter_named_strings(nested, name)
 
 
-def sink_category(fn_name: str, arguments: Any = None) -> str:
-    """The category of a tool call, from its name and, for reads, its arguments.
+def sink_category(fn_name: str, arguments: Any = None, inventory: Any = None) -> str:
+    """The category of a tool call, from its declaration or name and, for reads, its arguments.
 
-    A read-named call that names a destination is "network": a URL it
-    requests (fetching a URL the model chose can carry data out in the URL
-    itself), or an address or channel in a destination argument (``to``,
-    ``recipient``, ``channel``, ...). The name alone can't make a call safe:
-    every destination in every call gets the destination checks. The name
-    still decides a call with no destination: a read runs, anything else is
-    held when the allowlist is on.
+    A declared tool (``inventory``, #176) starts from its declared capability;
+    an undeclared one from the name patterns above. A read call that names a
+    destination is "network": a URL it requests (fetching a URL the model
+    chose can carry data out in the URL itself), or an address or channel in
+    a destination argument (``to``, ``recipient``, ``channel``, ...). The name
+    alone can't make a call safe: every destination in every call gets the
+    destination checks. The name still decides a call with no destination: a
+    read runs, anything else is held when the allowlist is on.
     """
-    category = _sink_category(fn_name)
+    category = inventory.category(fn_name) if inventory is not None else None
+    if category is None:
+        category = _sink_category(fn_name)
     if category == "read":
         from router.allowlist import call_destinations  # allowlist imports this module
 
@@ -284,12 +287,15 @@ def is_trusted_source(source: dict[str, Any]) -> bool:
     return source.get("trust_tier") == "internal"
 
 
-def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def classify_sinks(messages: list[dict[str, Any]], inventory: Any = None) -> list[dict[str, Any]]:
     """Extract assistant tool calls that can write, transmit, or have unknown capability.
 
     Known read-only tools are deliberately excluded, unless the call requests a
     URL ("network", #218). Unknown tools remain sinks so a new or misspelled
-    function name fails closed instead of bypassing policy.
+    function name fails closed instead of bypassing policy. With a declared
+    inventory (#176), a call that contradicts its declaration or names a tool
+    the inventory doesn't list is a sink too, with ``inventory`` set to
+    ``capability_violation`` or ``unlisted``.
     """
     sinks = []
     for msg in messages:
@@ -298,17 +304,20 @@ def classify_sinks(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for call in msg.get("tool_calls") or []:
             fn = call.get("function", {})
             name = fn.get("name", "")
-            category = sink_category(name, fn.get("arguments"))
-            if category == "read":
+            arguments = fn.get("arguments")
+            category = sink_category(name, arguments, inventory)
+            flag = inventory.check(name, arguments) if inventory is not None else None
+            if category == "read" and flag is None:
                 continue
-            sinks.append(
-                {
-                    "id": call.get("id"),
-                    "name": name,
-                    "category": category,
-                    "args_length": len(fn.get("arguments", "")),
-                }
-            )
+            sink = {
+                "id": call.get("id"),
+                "name": name,
+                "category": category,
+                "args_length": len(arguments) if isinstance(arguments, str) else 0,
+            }
+            if flag is not None:
+                sink["inventory"] = flag
+            sinks.append(sink)
     return sinks
 
 

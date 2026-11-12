@@ -520,6 +520,38 @@ the current LiteLLM callback cannot reliably inspect streamed tool calls before
 they reach the client. Read-only tools are not treated as egress sinks; unknown
 tools are treated as potentially dangerous.
 
+### Declared tools
+
+By default the router infers a tool's capability from its name (`send_` is a
+send, `get_`/`fetch_`/`list_` are reads), and any call that carries a
+destination is checked whatever its name (#219, #221). A `tools:` section in
+the policy replaces the guess with a declaration (#176, [ADR-011](docs/adr/ADR-011-tool-inventory.md)):
+
+```yaml
+tools:
+  read_file:         {capability: local-read}
+  get_github_issue:  {capability: network-read, destination: https://api.github.com}
+  fetch_url:         {capability: network-read}   # destination decided per call
+  send_email:        {capability: egress}         # destinations: allowed_destinations
+  run_command:       {capability: exec}           # never a plain grant (#222)
+```
+
+A declaration is a claim, not a promise the tool keeps: what a tool can really
+do is bounded by its credentials and network, and the inventory is the spec
+those are checked against. What the gateway checks is a **contradiction**
+between the claim and the call:
+
+- a `local-read` tool whose call names any destination (URL, host, address,
+  channel), or a `network-read` tool with a fixed `destination` whose call
+  names another origin, sets `capability_violation` (bundled policy: block);
+- a tool missing from a non-empty inventory sets `tool_unlisted` (hold), so a
+  new or renamed tool is declared before it runs.
+
+A fixed `destination` is an origin (`https://host[:port]`) from deploy-time
+config, never from the tool's own metadata, and it never relaxes the allowlist
+or user-named checks. Without a `tools:` section nothing changes. The demo
+policy declares the demo tool service's tools (`scripts/demo_policy.py`).
+
 ### Route controls
 
 Each route in `deploy/policy.yaml` can enforce, besides its model group:
@@ -590,6 +622,8 @@ Session memory is the third switch: `ROUTER_MODE`, which the harness already run
 **Which combination to run.** The published 2026-10-27 experiment measured all 8 combinations once on 52 scenarios; the winner is session + classifier + allowlist, which catches 22 of 26 attack turns and flags 5 of 20 benign turns (4 of the 5 are legitimate sends to unlisted destinations). Results, what each layer contributes, and the limitations: [`docs/results/protection-combinations.md`](docs/results/protection-combinations.md).
 
 **Destination allowlist (#167).** With `allowlist=on`, every destination in a send must be listed in the policy's `allowed_destinations`, wherever it came from: email to/cc/bcc (lists and display names included), URLs and endpoints, webhooks, Slack channels and message recipients. Entries are an exact address (`alice@example.com`; `@example.com` domain wildcards are rejected, so every allowed inbox has known owners), a URL host (`https://api.partner.com`, matched on the parsed host, so `https://api.partner.com@evil.io/` and `https://api.partner.com.evil.io/` are refused) or a channel (`"#team-reports"`). A send to anything else, or with no destination found, sets `destination_not_allowed`, which the bundled policy scores high: pre-call removes tools, post-call holds the generated call. Sends are tools in the exfil category plus tools of unknown capability; file writes and reads are not checked (#93). Decision records name a refused destination by domain, host or channel only (`unlisted_destinations`), never the full address. The list is validated at startup even when the allowlist is off. Being allowlisted means permitted, not trusted: the classifier and taint checks still apply. Every results row has a `controls` column, and the startup and decision records carry the switches, so each number traces back to the protections that produced it. A single run can also be overridden: `harness/matrix.py --controls classifier=off`. `ROUTER_LOCK=true` rejects `classifier=off`.
+
+**Declared tools (#176).** With a `tools:` section in the policy, a call that contradicts its tool's declaration sets `capability_violation` and lists the tool names in `capability_violations`; a call to a tool the inventory doesn't declare sets `tool_unlisted` and `unlisted_tools`. Only tool names are recorded, never arguments. The startup record's `tools` field counts the declared tools per capability, or is `null` when the policy declares none.
 
 **Sanity-check the run.** In the progress log, every turn should resolve to `allow`, `route-hardened`, `strip-tools`, or `block`. If you see `['unknown', ...]`, the proxy is rejecting requests. Check `docker logs deploy-litellm-1` for `classifier is required but not configured`. A quick check against the finished CSV:
 
@@ -833,7 +867,7 @@ tests/
 
 ## Architecture decisions
 
-See `docs/adr/` for ADR-001 through ADR-009. Key decisions:
+See `docs/adr/` for ADR-001 through ADR-011. Key decisions:
 
 - Session = one agent run (ADR-001)
 - Taint tracker, not full history pooling (ADR-002)
@@ -844,5 +878,7 @@ See `docs/adr/` for ADR-001 through ADR-009. Key decisions:
 - Four context-richness levels L0–L3 (ADR-007)
 - Proxy-issued session IDs (ADR-008)
 - Sends go only to destinations the user named; tool content never chooses one (ADR-009)
+- URL destinations are authorized exactly, path and query included (ADR-010)
+- Tools are declared, not guessed from their names; each claim has an enforcer outside the tool (ADR-011)
 
 The optional work-tool setup now includes Gmail read/send, Jira and GitHub checks, six UI prompts, and deterministic source-to-sink replays. See the [work-channel runbook](demo/DEMO_RUNBOOK.md#work-channel-beats-and-deterministic-fallback-204208). `make eval-live-dry` previews the constrained real-model check; `make eval-live` writes a separate three-seed result, never executing tools. The [complete 58-scenario matrix](docs/results/protection-combinations.md#complete-58-scenario-rerun-2026-10-31) archives 4,032 turn records. The separate [real-account rehearsal](docs/results/work-tools-live.md) records successful Gmail sends and substantial benign read false positives; the [constrained probe](docs/results/protection-combinations.md#real-model-probe-199-part-4) distinguishes gateway prevention from model non-generation.

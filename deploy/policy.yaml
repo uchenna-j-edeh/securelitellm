@@ -185,6 +185,22 @@ rules:
       tainted_spans_in_sink_args: true
     score: 1.0
 
+  # Tool inventory (#176). Only set when the policy has a `tools:` section.
+  # A call that contradicts the tool's declaration: a local-read tool asked to
+  # reach a destination, or a network-read tool with a fixed destination asked
+  # to reach another. The claim and the call disagree, so the call is blocked.
+  - id: capability_violation
+    when:
+      capability_violation: true
+    score: 0.9
+
+  # A tool the inventory doesn't declare. Held, so a new or renamed tool gets
+  # declared before it runs.
+  - id: tool_unlisted
+    when:
+      tool_unlisted: true
+    score: 0.75
+
   # The deprecated OpenAI functions/function_call format is invisible to every
   # control: role=function results are never classified and function_call
   # sinks are never inspected or stripped. Reject it outright (#95).

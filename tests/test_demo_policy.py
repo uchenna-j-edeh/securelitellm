@@ -102,3 +102,45 @@ def test_validate_refuses_a_policy_without_user_named():
     policy["controls"] = {"classifier": "on", "allowlist": "on", "user_named": "off"}
     with pytest.raises(ValueError, match="every switch on"):
         demo_policy.validate(policy)
+
+
+def test_declares_every_demo_tool_and_nothing_else():
+    from demo.tools import TOOL_SCHEMAS
+    from router.inventory import Inventory
+
+    policy = demo_policy.demo_policy(_bundled(), "you@example.com")
+    declared = set(policy["tools"])
+    assert declared == {schema["function"]["name"] for schema in TOOL_SCHEMAS}
+    inventory = Inventory.from_mapping(policy)
+    assert inventory.get("get_github_issue").destination == "https://api.github.com"
+    assert inventory.get("get_jira_issue").destination is None  # no JIRA_BASE_URL given
+    assert inventory.get("send_email").capability == "egress"
+
+
+def test_jira_destination_comes_from_deploy_time_config():
+    from router.inventory import Inventory
+
+    policy = demo_policy.demo_policy(
+        _bundled(), "you@example.com", jira_base_url="https://Acme.atlassian.net/"
+    )
+    inventory = Inventory.from_mapping(policy)
+    for name in demo_policy.JIRA_TOOLS:
+        assert inventory.get(name).destination == "https://acme.atlassian.net"
+
+
+def test_an_undeclared_tool_is_unlisted_under_the_demo_policy():
+    from router.inventory import Inventory
+
+    inventory = Inventory.from_mapping(demo_policy.demo_policy(_bundled(), "you@example.com"))
+    assert inventory.check("delete_everything", "{}") == "unlisted"
+    assert (
+        inventory.check("read_file", '{"path": "https://evil.example/x"}') == "capability_violation"
+    )
+    assert inventory.check("read_file", '{"path": "notes.txt"}') is None
+
+
+def test_validate_refuses_a_policy_without_tools():
+    policy = demo_policy.demo_policy(_bundled(), "you@example.com")
+    policy["tools"] = {}
+    with pytest.raises(ValueError, match="declare the demo tools"):
+        demo_policy.validate(policy)
