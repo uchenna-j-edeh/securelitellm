@@ -45,6 +45,7 @@ from router.allowlist import (
 from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.controls import resolve_controls
+from router.inventory import Inventory
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
 from router.policy import (
@@ -184,15 +185,17 @@ def _extract_features(
     messages: list[dict],
     level: str,
     mode: str,
+    inventory: Inventory | None = None,
 ) -> dict[str, Any]:
     sources = classify_sources(messages)
-    sinks = classify_sinks(messages)
+    sinks = classify_sinks(messages, inventory)
 
     # L0 — bare boolean flags
     features: dict[str, Any] = {
         "untrusted_seen": False,
         "sink_requested": len(sinks) > 0,
     }
+    _check_inventory(features, sinks)
 
     if mode == "session":
         store = get_store()
@@ -241,6 +244,9 @@ class RouterHook(CustomLogger):
         self._own_destinations = Allowlist.from_entries(
             policy_document.get("own_destinations") or []
         )
+        # Declared tools (#176): None when the policy declares none, so the
+        # name patterns decide as before.
+        self._inventory = Inventory.from_mapping(policy_document)
         if self.config.lock and not self._controls.classifier:
             raise ValueError("ROUTER_LOCK=true rejects unsafe config: classifier=off")
         # classifier=off (#196): not part of this configuration, so not created.
@@ -258,6 +264,7 @@ class RouterHook(CustomLogger):
                 **self.config.startup_record(),
                 "controls": self._controls.summary(),
                 "routing": self._routing.summary(),
+                "tools": self._inventory.summary() if self._inventory is not None else None,
             }
         )
 
@@ -436,13 +443,17 @@ class RouterHook(CustomLogger):
         session = self._resolve_session(data, request_id, user_api_key_dict, messages, "pre_call")
         session_id = session.key
 
-        features = _extract_features(session_id, messages, self.config.level, self.config.mode)
+        features = _extract_features(
+            session_id, messages, self.config.level, self.config.mode, self._inventory
+        )
         features["streaming_tool_request"] = bool(
             data.get("stream") and (data.get("tools") or data.get("functions"))
         )
         features["legacy_function_calling"] = _uses_legacy_function_calling(data, messages)
         if self._allowlist is not None or self._controls.user_named:
-            request_sinks = sinks_with_arguments(classify_sinks(messages), messages)
+            request_sinks = sinks_with_arguments(
+                classify_sinks(messages, self._inventory), messages
+            )
             if self._allowlist is not None:
                 _check_destinations(features, self._allowlist, request_sinks)
             if self._controls.user_named:
@@ -611,10 +622,16 @@ class RouterHook(CustomLogger):
         request_id = data.get("litellm_call_id") or ""
         messages = data.get("messages", [])
 
-        generated_calls = _extract_response_sinks(response, include_reads=True)
+        generated_calls = _extract_response_sinks(
+            response, include_reads=True, inventory=self._inventory
+        )
         if not generated_calls:
             return None
-        egress_sinks = [c for c in generated_calls if c["category"] != "read" or "malformed" in c]
+        egress_sinks = [
+            c
+            for c in generated_calls
+            if c["category"] != "read" or "malformed" in c or "inventory" in c
+        ]
         pre_level = _pre_call_level(data)
         data_class = _pre_call_class(data) or _MISSING_PRE_CALL_CLASS
         pre_route = self._routing.resolve(pre_level or _MISSING_PRE_CALL_LEVEL, data_class)
@@ -623,10 +640,13 @@ class RouterHook(CustomLogger):
         session = self._resolve_session(data, request_id, user_api_key_dict, messages, "post_call")
         session_id = session.key
 
-        features = _extract_features(session_id, messages, self.config.level, self.config.mode)
+        features = _extract_features(
+            session_id, messages, self.config.level, self.config.mode, self._inventory
+        )
         features["sink_requested"] = bool(egress_sinks)
         features["streaming_tool_request"] = False
         features["malformed_tool_call"] = any("malformed" in s for s in egress_sinks)
+        _check_inventory(features, egress_sinks)  # the generated calls, not the request's
 
         sources = classify_sources(messages)
         untrusted_sources = [s for s in sources if not is_trusted_source(s)]
@@ -765,6 +785,21 @@ def _check_destinations(
     features["unlisted_destinations"] = unlisted
 
 
+def _check_inventory(features: dict[str, Any], sinks: list[dict[str, Any]]) -> None:
+    """Set the inventory features (#176): calls that contradict or escape the declared tools.
+
+    Only tool names are recorded, never arguments.
+    """
+    violations = sorted({s["name"] for s in sinks if s.get("inventory") == "capability_violation"})
+    unlisted = sorted({s["name"] for s in sinks if s.get("inventory") == "unlisted"})
+    features["capability_violation"] = bool(violations)
+    features["tool_unlisted"] = bool(unlisted)
+    if violations:
+        features["capability_violations"] = violations
+    if unlisted:
+        features["unlisted_tools"] = unlisted
+
+
 def _check_user_named(
     features: dict[str, Any], sinks: list[dict[str, Any]], own: Allowlist
 ) -> None:
@@ -824,13 +859,17 @@ async def _classify_sources(
     return await asyncio.gather(*[_one(s) for s in sources])
 
 
-def _extract_response_sinks(response: Any, include_reads: bool = False) -> list[dict[str, Any]]:
+def _extract_response_sinks(
+    response: Any, include_reads: bool = False, inventory: Inventory | None = None
+) -> list[dict[str, Any]]:
     """Pull tool_calls out of a LiteLLM completion response object.
 
     Read-only calls are skipped unless include_reads is set. Fails closed
     (#82, #156): a call whose name or arguments cannot be parsed is returned
     as a sink with ``malformed`` set — even if its name looks like a read
-    tool — so policy holds it rather than releasing it uninspected.
+    tool — so policy holds it rather than releasing it uninspected. With a
+    declared inventory (#176) each sink carries ``inventory`` when the call
+    contradicts its declaration or names an undeclared tool.
     """
     from router.taint import sink_category, tool_call_defect
 
@@ -844,8 +883,12 @@ def _extract_response_sinks(response: Any, include_reads: bool = False) -> list[
             name = getattr(fn, "name", None)
             arguments = getattr(fn, "arguments", None)
             defect = tool_call_defect(name, arguments)
-            category = sink_category(name, arguments) if isinstance(name, str) else "other"
-            if category == "read" and defect is None and not include_reads:
+            if isinstance(name, str):
+                category = sink_category(name, arguments, inventory)
+                flag = inventory.check(name, arguments) if inventory is not None else None
+            else:
+                category, flag = "other", None
+            if category == "read" and defect is None and flag is None and not include_reads:
                 continue
             arguments = arguments if isinstance(arguments, str) else ""
             sink = {
@@ -857,6 +900,8 @@ def _extract_response_sinks(response: Any, include_reads: bool = False) -> list[
             }
             if defect is not None:
                 sink["malformed"] = defect
+            if flag is not None:
+                sink["inventory"] = flag
             sinks.append(sink)
     return sinks
 

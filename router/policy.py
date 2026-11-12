@@ -70,6 +70,7 @@ _LEGACY_THRESHOLD_KEYS = {
     "block": "critical",
 }
 _ALLOWED_FEATURES = {
+    "capability_violation",
     "classifier_error",
     "classifier_injection",
     "destination_not_allowed",
@@ -79,6 +80,7 @@ _ALLOWED_FEATURES = {
     "sink_requested",
     "streaming_tool_request",
     "tainted_spans_in_sink_args",
+    "tool_unlisted",
     "untrusted_seen",
 }
 _DATA_CLASS_FEATURES = set(DETECTORS)
@@ -283,4 +285,5 @@ _POLICY_SECTIONS = {
     "controls",
     "allowed_destinations",
     "own_destinations",
+    "tools",
 }
