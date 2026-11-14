@@ -116,13 +116,16 @@ demo:
 # DeBERTa classifier. Powers the live A/B delayed-exfil demo (UI mode switch).
 # Both proxies run the winning switches (classifier + allowlist) from the
 # generated deploy/policy.demo.yaml; only their memory differs.
+# BEDROCK=1 adds the "bedrock" model group's AWS credentials (see
+# deploy/docker-compose.bedrock.yml); then run the UI with DEMO_MODEL=bedrock.
+BEDROCK_OVERLAY := $(if $(BEDROCK),-f deploy/docker-compose.bedrock.yml)
 demo-dual-up:
 	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)
 	@set -a; . ./deploy/.env; set +a; $(PYTHON) scripts/demo_policy.py
 	docker compose --env-file deploy/.env \
 	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
-	               -f deploy/docker-compose.demo-dual.yml up -d --build
+	               -f deploy/docker-compose.demo-dual.yml $(BEDROCK_OVERLAY) up -d --build
 	# The proxies read router/ and policy.demo.yaml from a bind mount, so Compose
 	# sees nothing changed and leaves running containers alone. Recreate just the
 	# two proxies so a code or policy change takes effect (the classifier and
@@ -130,7 +133,7 @@ demo-dual-up:
 	docker compose --env-file deploy/.env \
 	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
-	               -f deploy/docker-compose.demo-dual.yml \
+	               -f deploy/docker-compose.demo-dual.yml $(BEDROCK_OVERLAY) \
 	               up -d --force-recreate --no-deps litellm litellm-stateless
 
 # Replay a corpus scenario against both demo proxies (scripted turns, mock model):

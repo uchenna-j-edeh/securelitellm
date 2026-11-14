@@ -1,0 +1,23 @@
+# Bedrock overlay — gives both demo proxies AWS credentials for the "bedrock"
+# model group in litellm_config.demo.yaml.
+#
+# Usage: BEDROCK=1 make demo-dual-up, then DEMO_MODEL=bedrock make demo
+#
+# The credentials are an AWS CLI profile on the host, mounted read-only; no key
+# is written to deploy/.env or passed on the command line. The profile should
+# hold only bedrock:InvokeModel and bedrock:InvokeModelWithResponseStream on the
+# one model. Note the mount exposes every profile in ~/.aws to the container.
+#
+# In production the ECS task role supplies credentials instead (infra/ecs.tf).
+
+x-aws: &aws
+  environment:
+    - AWS_PROFILE=${BEDROCK_AWS_PROFILE:-securelitellm}
+  volumes:
+    - ${HOME}/.aws:/root/.aws:ro
+
+services:
+  litellm:
+    <<: *aws
+  litellm-stateless:
+    <<: *aws

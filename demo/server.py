@@ -65,6 +65,8 @@ async def demo_config() -> dict:
         model_display = "Groq · openai/gpt-oss-120b"
     elif MODEL == "groq":
         model_display = "Groq · qwen/qwen3.8-27b"
+    elif MODEL == "bedrock":
+        model_display = "Amazon Bedrock · openai/gpt-oss-120b"
     else:
         model_display = MODEL
     return {

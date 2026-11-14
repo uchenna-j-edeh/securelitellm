@@ -50,6 +50,14 @@ model_list:
       model: groq/openai/gpt-oss-120b
       api_key: os.environ/GROQ_API_KEY
 
+  # Amazon Bedrock: the same gpt-oss-120b model as "gpt", served from the AWS
+  # account. Needs AWS credentials in the proxy container; the demo stack adds
+  # them with docker-compose.bedrock.yml (`BEDROCK=1 make demo-dual-up`).
+  - model_name: bedrock
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: us-east-1
+
   # Alias "llm" → groq so existing tests keep working
   - model_name: llm
     litellm_params:
