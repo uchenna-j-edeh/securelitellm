@@ -1,6 +1,7 @@
 """Registering the demo agent and its virtual key (#148)."""
 
 import importlib.util
+import os
 import stat
 from pathlib import Path
 
@@ -27,7 +28,8 @@ def test_prepare_adds_the_missing_settings_and_keeps_the_file_private(tmp_path):
     assert values["DEMO_AGENT_ID"] == "demo-assistant"
     assert values["DEMO_AGENT_KEY"].startswith("sk-agent-") and len(values["DEMO_AGENT_KEY"]) > 40
     assert len(values["LITELLM_DB_PASSWORD"]) >= 32
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name == "posix":  # Unix permission bits only
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_prepare_never_replaces_existing_settings(tmp_path):
