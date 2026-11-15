@@ -212,7 +212,12 @@ def make_hook(monkeypatch, log_path):
         ttl=None,
         idle_ttl=1800,
         auth=None,
+        workers=None,
     ):
+        for var in ("NUM_WORKERS", "WEB_CONCURRENCY"):
+            monkeypatch.delenv(var, raising=False)
+        if workers is not None:
+            monkeypatch.setenv("NUM_WORKERS", str(workers))
         monkeypatch.setenv("ROUTER_MODE", mode)
         monkeypatch.setenv("ROUTER_LEVEL", "L3")
         monkeypatch.setenv("ROUTER_LOG_PATH", log_path)
@@ -600,3 +605,45 @@ async def _held_second(hook):
     _, _, headers = await _turn(hook, _request("req-9", run="run-2"), _model_response())
     listing = hook.approvals_list(ADMIN)["approvals"]
     return headers["x-securelitellm-approval"], listing[-1]["approval_ref"]
+
+
+# ---------------------------------------------------------------------------
+# One worker only (in-process state)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("session_mode", "approvals", "env", "refused"),
+    [
+        (False, True, {"NUM_WORKERS": "4"}, True),
+        (True, False, {"NUM_WORKERS": "2"}, True),
+        (False, True, {"WEB_CONCURRENCY": "3"}, True),
+        (True, True, {"NUM_WORKERS": "1"}, False),
+        (True, True, {}, False),
+        (False, False, {"NUM_WORKERS": "8"}, False),  # stateless, no approvals: nothing to share
+    ],
+)
+def test_in_process_state_needs_one_worker(session_mode, approvals, env, refused):
+    from router.hook import check_single_worker
+
+    def check():
+        check_single_worker(env, session_mode=session_mode, approvals=approvals)
+
+    if refused:
+        with pytest.raises(ValueError, match="one worker"):
+            check()
+    else:
+        check()
+
+
+def test_a_bad_worker_count_is_refused():
+    from router.hook import check_single_worker
+
+    with pytest.raises(ValueError, match="NUM_WORKERS must be an integer"):
+        check_single_worker({"NUM_WORKERS": "four"}, session_mode=False, approvals=True)
+
+
+def test_the_hook_refuses_to_start_with_approvals_on_several_workers(make_hook):
+    with pytest.raises(ValueError, match="approvals: on"):
+        make_hook(mode="stateless", workers=4)
+    assert make_hook(mode="stateless", workers=1) is not None

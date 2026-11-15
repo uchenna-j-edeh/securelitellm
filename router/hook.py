@@ -299,6 +299,11 @@ class RouterHook(CustomLogger):
         if self.config.lock and self._routing.source == "legacy":
             raise ValueError("ROUTER_LOCK=true requires the policy to define 'routes' and 'matrix'")
         verify_model_groups(self._routing, self.config.litellm_config_path)
+        check_single_worker(
+            dict(os.environ),
+            session_mode=self.config.mode == "session",
+            approvals=self._controls.approvals,
+        )
         self._issued: OrderedDict[str, str] = OrderedDict()
         # Held for approval (#174): only with approvals=on.
         self._approvals: ApprovalStore | None = None
@@ -1314,6 +1319,44 @@ def _approval_notice_response(response: Any, status: str) -> Any:
         if hasattr(choice, "finish_reason"):
             choice.finish_reason = "content_filter"
     return held
+
+
+_WORKER_ENV = ("NUM_WORKERS", "WEB_CONCURRENCY")
+
+
+def check_single_worker(environ: dict[str, str], *, session_mode: bool, approvals: bool) -> None:
+    """Refuse to start with in-process state across more than one worker.
+
+    Sessions, escalation counts and approvals live in this process's memory,
+    guarded by a lock that covers this process only. With several workers each
+    has its own copy: a follow-up request on another worker is rejected as an
+    unknown session, an approval can't be found or decided, and per-session
+    escalation is split. Until the shared store (#169) lands, these need one
+    worker. LiteLLM's CLI exports NUM_WORKERS for uvicorn, gunicorn and granian;
+    WEB_CONCURRENCY covers servers started outside it that honour it. A server
+    started some other way (e.g. ``uvicorn --workers N`` by hand) is not seen.
+    """
+    stateful = [
+        name
+        for name, on in (("ROUTER_MODE=session", session_mode), ("approvals: on", approvals))
+        if on
+    ]
+    if not stateful:
+        return
+    for var in _WORKER_ENV:
+        raw = environ.get(var, "").strip()
+        if not raw:
+            continue
+        try:
+            workers = int(raw)
+        except ValueError:
+            raise ValueError(f"{var} must be an integer, got {raw!r}") from None
+        if workers > 1:
+            raise ValueError(
+                f"{var}={workers}, but {' and '.join(stateful)} keep state in this process's "
+                "memory, which other workers can't see; run one worker until the shared "
+                "store (#169) lands"
+            )
 
 
 def _proxy_app_and_auth() -> tuple[Any, Any]:
