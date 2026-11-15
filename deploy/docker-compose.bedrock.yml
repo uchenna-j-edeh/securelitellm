@@ -1,5 +1,5 @@
-# Bedrock overlay — gives both demo proxies AWS credentials for the "bedrock"
-# model group in litellm_config.demo.yaml.
+# Bedrock overlay — gives both demo proxies AWS credentials and swaps in
+# litellm_config.bedrock.yaml, where every route is served by Amazon Bedrock.
 #
 # Usage: BEDROCK=1 make demo-dual-up, then DEMO_MODEL=bedrock make demo
 #
@@ -15,6 +15,9 @@ x-aws: &aws
     - AWS_PROFILE=${BEDROCK_AWS_PROFILE:-securelitellm}
   volumes:
     - ${HOME}/.aws:/root/.aws:ro
+    # Replaces litellm_config.demo.yaml: hardened, quarantine and sensitive
+    # requests are served by Bedrock too, not the mock or the local model.
+    - ./litellm_config.bedrock.yaml:/app/config.yaml:ro
 
 services:
   litellm:
