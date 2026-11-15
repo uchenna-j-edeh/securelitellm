@@ -1,0 +1,75 @@
+# Demo LiteLLM config for Bedrock mode (docker-compose.bedrock.yml,
+# `BEDROCK=1 make demo-dual-up`). Same as litellm_config.demo.yaml except that
+# the hardened, quarantine and sensitive groups are served by Amazon Bedrock
+# instead of the mock and the local Ollama model. Keep the two in sync.
+#
+# Nothing here runs on the demo machine: elevated-risk, high-risk and
+# sensitive requests go to the model in the operator's own AWS account. The
+# routes' controls (held sinks, removed tools) are enforced by the hook
+# whatever model answers.
+
+model_list:
+  - model_name: mock
+    litellm_params:
+      model: openai/mock-gpt-4
+      api_base: http://mock-model:8001/v1
+      api_key: "sk-fake"
+
+  # Routing tier (#140): requests at elevated risk are sent to this group.
+  - model_name: hardened
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: us-east-1
+    model_info:
+      supports_function_calling: true
+
+  # Routing tier (#183): high-risk requests are sent to this group with tools
+  # removed.
+  - model_name: quarantine
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: us-east-1
+
+  # Sensitive data (#181): a dedicated group the admin has cleared for secrets
+  # and personal data. Here that is Bedrock in the operator's AWS account, not a
+  # third-party API. Tools are kept.
+  - model_name: sensitive
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: us-east-1
+    model_info:
+      supports_function_calling: true
+      cleared_for: [sensitive]
+
+  # Groq free tier (confirmed working model for this key):
+  - model_name: groq
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
+  # OSS 120B — large open-source model, less restricted than Qwen
+  - model_name: gpt
+    litellm_params:
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
+
+  # Amazon Bedrock: the same gpt-oss-120b model as "gpt", served from the AWS
+  # account. Credentials come from an AWS profile mounted by
+  # docker-compose.bedrock.yml.
+  - model_name: bedrock
+    litellm_params:
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: us-east-1
+
+  # Alias "llm" → groq so existing tests keep working
+  - model_name: llm
+    litellm_params:
+      model: groq/qwen/qwen3.8-27b
+      api_key: os.environ/GROQ_API_KEY
+
+litellm_settings:
+  drop_params: true
+  callbacks: ["router.hook.proxy_handler_instance"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

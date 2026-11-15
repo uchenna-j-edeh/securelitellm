@@ -637,6 +637,7 @@ _ROOT = Path(__file__).parent.parent
         "deploy/litellm_config.local.yaml",
         "deploy/litellm_config_prod.yaml",
         "deploy/litellm_config.demo.yaml",
+        "deploy/litellm_config.bedrock.yaml",
     ],
 )
 def test_every_deploy_config_serves_the_bundled_routes(config):
@@ -667,6 +668,16 @@ def test_demo_config_differs_from_the_eval_config_only_in_local_groups():
         assert demo.pop(group)["model"].startswith("ollama_chat/"), group
         assert base.pop(group)["model"] == "openai/mock-gpt-4", group
     assert demo == base
+
+
+def test_bedrock_config_differs_from_the_demo_config_only_in_the_route_groups():
+    """Bedrock mode serves hardened, quarantine and sensitive from Bedrock, not the mock or Ollama."""
+    bedrock = _model_list("deploy/litellm_config.bedrock.yaml")
+    demo = _model_list("deploy/litellm_config.demo.yaml")
+    for group in ("hardened", "quarantine", "sensitive"):
+        assert bedrock.pop(group) == bedrock["bedrock"], group
+        demo.pop(group)
+    assert bedrock == demo
 
 
 def test_missing_model_group_fails(tmp_path):
