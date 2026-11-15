@@ -30,7 +30,10 @@ DEMO_DIR = Path(__file__).parent
 LOGS_DIR = DEMO_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 
-MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "")
+# The agent's own virtual key (#148). The demo proxies refuse model requests
+# sent with the master key; it remains the fallback for a stack without agents.
+AGENT_ID = os.environ.get("DEMO_AGENT_ID", "")
+MASTER_KEY = os.environ.get("DEMO_AGENT_KEY") or os.environ.get("LITELLM_MASTER_KEY", "")
 CONTAINER_NAME = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
 
 # Dual-proxy wiring for the live A/B delayed-exfil demo. Each mode points at a
@@ -71,6 +74,7 @@ async def demo_config() -> dict:
         model_display = MODEL
     return {
         "agent": "custom tool-calling agent",
+        "agent_id": AGENT_ID if os.environ.get("DEMO_AGENT_KEY") else "",
         "model_alias": MODEL,
         "model_display": model_display,
         "tool_service": TOOL_SERVER_URL,

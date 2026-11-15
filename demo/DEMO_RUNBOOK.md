@@ -37,11 +37,13 @@ Browser UI :8003
     v
 custom tool-calling agent (demo/agent.py, runs on the host)
     |
-    | OpenAI-compatible chat request + x-agent-run-id
+    | OpenAI-compatible chat request + x-agent-run-id,
+    | authenticated with the agent's own key (agent "demo-assistant")
     v
 Docker: LiteLLM + SecureLiteLLM hook
     |-- session proxy   :4000
     |-- stateless proxy :4001
+    |-- Postgres (internal Docker network; LiteLLM's agent keys, #148)
     |-- DeBERTa prompt-injection classifier :8080 (internal Docker network)
     |-- mock model :8001 (fallback/evaluation; serves the hardened route)
     `-- Ollama qwen2.5:1.5b (internal Docker network; serves the quarantine route)
@@ -698,6 +700,29 @@ It asks who chose the destination. If the user didn't type it, it doesn't go."
 `make demo-replay SCENARIO=sc-050` replays Beat 6 deterministically: `strip-tools`,
 `destination_not_allowed` and `destination_not_user_named`, in both modes. The replay
 exercises routing decisions only; it sends no email.
+
+## Beat 8 — Each agent has its own key, and it can be revoked
+
+The demo agent no longer uses the master key. `make demo-dual-up` registers it as the
+agent `demo-assistant` with its own key, limited to chat requests, and both proxies
+refuse model requests from the master key (#148).
+
+1. Run any beat and open a decision card: it starts with `agent=demo-assistant`.
+2. In a terminal: `make demo-agent-block`. Wait about five seconds, click **New Session**
+   and send any prompt. The request fails with "Key is blocked" before the model is called.
+3. `make demo-agent-unblock`, wait about five seconds, and the agent works again.
+
+Checked 2026-11-14: a blocked key was refused at once by the proxy that received the
+block and after 5 seconds by the other one, and likewise for the unblock. The delay is
+each proxy's key cache, set to 5 seconds in the demo config; LiteLLM's default is 60.
+
+**Say:** "Every decision is tied to a named agent, and the security team can cut one
+agent off without touching the others. The agent can't mint itself a new key, and it
+can't ask for the sensitive or quarantine models directly; only the gateway routes
+there."
+
+What this doesn't show: there is only one agent in the demo, so separate policies per
+agent (#176) and the user an agent acts for (#149) are not shown.
 
 ## Result matrix to show the audience
 

@@ -73,3 +73,6 @@ litellm_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  # Short key cache so revoking an agent takes effect within seconds on both
+  # proxies; see litellm_config.demo.yaml (#148).
+  user_api_key_cache_ttl: 5

@@ -26,8 +26,28 @@
 # Both proxies use litellm_config.demo.yaml, where the quarantine model group
 # is a local Ollama model (#183): high-risk context never leaves the machine.
 # First start pulls the model (~1 GB) into a named volume.
+#
+# Agent identity (#148): both proxies share a Postgres database, which LiteLLM
+# needs for virtual keys. `make demo-dual-up` registers the demo agent and its
+# key (scripts/demo_agents.py). With ROUTER_REQUIRE_AGENT_KEY=true the master
+# key can administer keys but can't send model requests.
 
 services:
+  # LiteLLM's key store. Not published on the host: only the two proxies reach it.
+  agents-db:
+    image: postgres@sha256:f377d590e5474681d4d7838635031a2b50647923b7abfa803ce9b5ff35d5c663  # 16-alpine
+    environment:
+      - POSTGRES_USER=litellm
+      - POSTGRES_DB=litellm
+      - POSTGRES_PASSWORD=${LITELLM_DB_PASSWORD:?Set LITELLM_DB_PASSWORD in .env (make demo-dual-up does)}
+    volumes:
+      - agents_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   ollama:
     image: ollama/ollama@sha256:1bef639749741b375e9a1eb2c1346fb57ce52f5432de1f74846e44ccc18e1687  # 0.40.0
     volumes:
@@ -55,11 +75,15 @@ services:
       - ROUTER_ROUTE_HEADER=true
       - POLICY_PATH=/workspace/deploy/policy.demo.yaml
       - ROUTER_LITELLM_CONFIG=/app/config.yaml
+      - DATABASE_URL=postgresql://litellm:${LITELLM_DB_PASSWORD:-}@agents-db:5432/litellm
+      - ROUTER_REQUIRE_AGENT_KEY=true
     volumes:
       - ./litellm_config.demo.yaml:/app/config.yaml:ro
     depends_on:
       ollama-pull:
         condition: service_completed_successfully
+      agents-db:
+        condition: service_healthy
 
   litellm-stateless:
     image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
@@ -83,6 +107,8 @@ services:
       - ROUTER_LITELLM_CONFIG=/app/config.yaml
       - ROUTER_ROUTE_HEADER=true
       - POLICY_PATH=/workspace/deploy/policy.demo.yaml
+      - DATABASE_URL=postgresql://litellm:${LITELLM_DB_PASSWORD:-}@agents-db:5432/litellm
+      - ROUTER_REQUIRE_AGENT_KEY=true
     depends_on:
       mock-model:
         condition: service_healthy
@@ -90,6 +116,10 @@ services:
         condition: service_healthy
       ollama-pull:
         condition: service_completed_successfully
+      # The session proxy applies the database migrations first; starting both
+      # against an empty database at once would race.
+      litellm:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
       interval: 10s
@@ -98,3 +128,4 @@ services:
 
 volumes:
   ollama_models:
+  agents_db:

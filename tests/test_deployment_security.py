@@ -149,3 +149,32 @@ def test_production_serves_sensitive_data_from_a_local_sidecar():
     assert sensitive == {"model": f"ollama_chat/{model}", "api_base": "http://localhost:11434"}
     demo_pull = load_yaml("deploy/docker-compose.demo-dual.yml")["services"]["ollama-pull"]
     assert demo_pull["entrypoint"][-1] == model  # demo and production run the same model
+
+
+def test_demo_proxies_require_agent_keys_and_share_a_private_key_database():
+    """Agent identity (#148): virtual keys live in Postgres, reachable only by the proxies."""
+    services = load_yaml("deploy/docker-compose.demo-dual.yml")["services"]
+    db = services["agents-db"]
+    assert db["image"].startswith("postgres@sha256:")
+    assert "ports" not in db  # never published on the host
+    assert not any("POSTGRES_PASSWORD=" in item and "${" not in item for item in db["environment"])
+    for name in ("litellm", "litellm-stateless"):
+        environment = services[name]["environment"]
+        assert "ROUTER_REQUIRE_AGENT_KEY=true" in environment, name
+        assert any(
+            item.startswith("DATABASE_URL=") and "@agents-db:" in item for item in environment
+        )
+    # The session proxy migrates the database before the stateless one starts.
+    assert services["litellm-stateless"]["depends_on"]["litellm"] == {
+        "condition": "service_healthy"
+    }
+    # The base stack (eval, e2e) has no database and keeps the master key usable.
+    base = load_yaml("deploy/docker-compose.yml")["services"]["litellm"]["environment"]
+    assert not any(item.startswith(("DATABASE_URL", "ROUTER_REQUIRE_AGENT_KEY")) for item in base)
+
+
+def test_demo_key_cache_is_short_so_revoking_an_agent_takes_effect_quickly():
+    """LiteLLM caches key lookups per proxy for 60 s by default; a blocked key outlives that long."""
+    for config in ("deploy/litellm_config.demo.yaml", "deploy/litellm_config.bedrock.yaml"):
+        settings = load_yaml(config)["general_settings"]
+        assert settings["user_api_key_cache_ttl"] <= 10, config

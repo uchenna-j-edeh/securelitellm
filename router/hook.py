@@ -45,6 +45,7 @@ from router.allowlist import (
 from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.controls import resolve_controls
+from router.identity import Caller, caller_identity
 from router.inventory import Inventory
 from router.logger import DecisionLogger
 from router.parser import extract_tool_context
@@ -318,6 +319,7 @@ class RouterHook(CustomLogger):
         user_api_key_dict: Any,
         messages: list[dict],
         phase: str,
+        agent: str | None = None,
     ) -> _Session:
         """Enforce the session contract. Violations are logged and rejected.
 
@@ -333,6 +335,7 @@ class RouterHook(CustomLogger):
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "phase": phase,
                     "session_id": exc.ref,
+                    "agent": agent,
                     "request_id": request_id,
                     "mode": self.config.mode,
                     "level": self.config.level,
@@ -353,6 +356,48 @@ class RouterHook(CustomLogger):
                 model=data.get("model", ""),
                 llm_provider="",
             ) from exc
+
+    def _require_agent(self, caller: Caller, data: dict, request_id: str) -> None:
+        """Reject a model request that no agent key authenticated (#148).
+
+        Only with ROUTER_REQUIRE_AGENT_KEY=true. The master key, or a virtual
+        key with no user_id, can't be attributed to an agent or revoked on its
+        own. In audit mode the violation is logged and the request continues.
+        """
+        violation = caller.violation
+        if violation is None or not self.config.require_agent_key:
+            return
+        self.decision_logger.emit(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "phase": "pre_call",
+                "session_id": None,
+                "agent": None,
+                "request_id": request_id,
+                "mode": self.config.mode,
+                "level": self.config.level,
+                "controls": self._controls.summary(),
+                "features": {"agent_violation": violation},
+                "risk_score": 1.0,
+                "action": "block",
+                "matched_rules": ["agent_unidentified"],
+                "enforce": self.config.enforce,
+            }
+        )
+        if not self.config.enforce:
+            return
+        import litellm.exceptions as _le
+
+        reason = (
+            "the master key is for administration only"
+            if violation == "admin_key"
+            else "this API key is not registered to an agent"
+        )
+        raise _le.BadRequestError(
+            message=f"SecureLiteLLM: {reason}; send model requests with an agent's own key",
+            model=data.get("model", ""),
+            llm_provider="",
+        )
 
     def _classify_data(
         self, session_id: str, messages: list[dict], features: dict[str, Any]
@@ -440,7 +485,11 @@ class RouterHook(CustomLogger):
 
         request_id = data.setdefault("litellm_call_id", str(uuid.uuid4()))
         messages = data.get("messages", [])
-        session = self._resolve_session(data, request_id, user_api_key_dict, messages, "pre_call")
+        caller = caller_identity(user_api_key_dict)
+        self._require_agent(caller, data, request_id)  # before a session is issued
+        session = self._resolve_session(
+            data, request_id, user_api_key_dict, messages, "pre_call", agent=caller.agent
+        )
         session_id = session.key
 
         features = _extract_features(
@@ -549,6 +598,7 @@ class RouterHook(CustomLogger):
                 "phase": "pre_call",
                 "session_id": session.ref,
                 "session_issued": session.issued,
+                "agent": caller.agent,
                 "request_id": request_id,
                 "mode": self.config.mode,
                 "level": self.config.level,
@@ -637,7 +687,10 @@ class RouterHook(CustomLogger):
         pre_route = self._routing.resolve(pre_level or _MISSING_PRE_CALL_LEVEL, data_class)
         if not egress_sinks and pre_route.hold != "all":
             return None  # read-only calls are released unless the route holds everything
-        session = self._resolve_session(data, request_id, user_api_key_dict, messages, "post_call")
+        caller = caller_identity(user_api_key_dict)
+        session = self._resolve_session(
+            data, request_id, user_api_key_dict, messages, "post_call", agent=caller.agent
+        )
         session_id = session.key
 
         features = _extract_features(
@@ -719,6 +772,7 @@ class RouterHook(CustomLogger):
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "phase": "post_call",
                 "session_id": session.ref,
+                "agent": caller.agent,
                 "request_id": request_id,
                 "mode": self.config.mode,
                 "level": self.config.level,

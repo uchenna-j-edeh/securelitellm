@@ -220,6 +220,7 @@ async def test_classifier_off_stateless_l3_blocks_verbatim_untrusted_content(mon
 
 def test_lock_rejects_classifier_off(monkeypatch, log_path):
     monkeypatch.setenv("ROUTER_LOCK", "true")
+    monkeypatch.setenv("ROUTER_REQUIRE_AGENT_KEY", "true")
     with pytest.raises(ValueError, match="classifier=off"):
         _make_hook(monkeypatch, log_path, "session")
 
