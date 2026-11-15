@@ -37,7 +37,7 @@ from router.policy import PolicyEngine, load_policy_document  # noqa: E402
 SOURCE = REPO_ROOT / "deploy" / "policy.yaml"
 TARGET = REPO_ROOT / "deploy" / "policy.demo.yaml"
 DEFAULT_DEMO_RECIPIENT = "demo-recipient@example.test"
-DEMO_CONTROLS = {"classifier": "on", "allowlist": "on", "user_named": "on"}
+DEMO_CONTROLS = {"classifier": "on", "allowlist": "on", "user_named": "on", "approvals": "on"}
 # Web pages the demo script fetches (Beat 1: https://httpbin.org/html). Since
 # #219 a fetch is checked like a send, so with the allowlist on, an unlisted
 # page is held.
