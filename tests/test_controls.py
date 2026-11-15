@@ -18,7 +18,12 @@ from tests._sessions import issued, key
 def test_defaults_are_todays_configuration():
     controls = resolve_controls({}, env="")
     assert controls == Controls(classifier=True, allowlist=False, user_named=False)
-    assert controls.summary() == {"classifier": "on", "allowlist": "off", "user_named": "off"}
+    assert controls.summary() == {
+        "classifier": "on",
+        "allowlist": "off",
+        "user_named": "off",
+        "approvals": "off",
+    }
     assert controls.label() == "classifier=on,allowlist=off"
 
 
@@ -140,7 +145,12 @@ def test_classifier_off_is_never_created_and_is_recorded(monkeypatch, log_path):
     assert hook._classifier is None
     startup = _records(log_path)[0]
     assert startup["event"] == "startup"
-    assert startup["controls"] == {"classifier": "off", "allowlist": "off", "user_named": "off"}
+    assert startup["controls"] == {
+        "classifier": "off",
+        "allowlist": "off",
+        "user_named": "off",
+        "approvals": "off",
+    }
 
 
 def test_classifier_on_is_the_default(monkeypatch, log_path):
@@ -150,6 +160,7 @@ def test_classifier_on_is_the_default(monkeypatch, log_path):
         "classifier": "on",
         "allowlist": "off",
         "user_named": "off",
+        "approvals": "off",
     }
 
 

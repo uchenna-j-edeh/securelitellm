@@ -156,6 +156,10 @@ class SessionStore:
         self._clock = clock
         self._last_sweep = clock()
 
+    @property
+    def idle_ttl(self) -> float:
+        return self._idle_ttl
+
     @classmethod
     def from_env(cls) -> "SessionStore":
         return cls(
