@@ -89,6 +89,8 @@ def replay(scenario_id: str) -> int:
     scenario = runner.load_scenario(path)
     print(f"{scenario.id} ({scenario.label}): {scenario.description.strip()}\n")
     runner.DEFAULT_MODEL = "mock"  # scripted replies; the demo config routes it to the mock
+    # The demo proxies accept model requests only from an agent's key (#148).
+    runner.LITELLM_MASTER_KEY = os.getenv("DEMO_AGENT_KEY") or runner.LITELLM_MASTER_KEY
     runner.current_log_size = lambda: datetime.now(timezone.utc)
     failed = False
     for mode, url, container in PROXIES:

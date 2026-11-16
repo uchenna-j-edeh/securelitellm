@@ -538,7 +538,7 @@
         <span class="dc-phase">${phase}${rec.risk_level ? ' · risk ' + esc(rec.risk_level) : ''}</span>
         <span>${rec.route ? routeBadge(rec.route) + ' ' : ''}<span class="ab ab-${cls}">${action}</span></span>
       </div>
-      <div class="dc-body">risk=${risk}  rules=[${rules}]
+      <div class="dc-body">${rec.agent ? `agent=${esc(rec.agent)}\n` : ''}risk=${risk}  rules=[${rules}]
 untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink_args !== undefined ? `\ntainted_hash=${f.tainted_spans_in_sink_args}` : ''}${rec.data_class ? `\ndata_class=${esc(rec.data_class)}${(rec.data_class_rules || []).length ? '  [' + esc(rec.data_class_rules.join(', ')) + ']' : ''}${f.session_sensitive ? '  (session)' : ''}` : ''}${clfHtml ? `\n${clfHtml}` : ''}</div>`;
     log.prepend(card);
 

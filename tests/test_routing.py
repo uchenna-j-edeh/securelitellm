@@ -616,6 +616,7 @@ async def test_route_header_ignores_a_request_without_a_route(monkeypatch, log_p
 def test_lock_rejects_the_route_header(monkeypatch):
     monkeypatch.setenv("ROUTER_ROUTE_HEADER", "true")
     monkeypatch.setenv("ROUTER_LOCK", "true")
+    monkeypatch.setenv("ROUTER_REQUIRE_AGENT_KEY", "true")
     monkeypatch.setenv("CLASSIFIER_BACKEND", "mock")
     from router.config import RouterConfig
 
@@ -759,6 +760,7 @@ def test_removed_hardened_model_env_is_rejected(monkeypatch, log_path):
 
 def test_lock_rejects_policy_without_routing_table(monkeypatch, log_path, tmp_path):
     monkeypatch.setenv("ROUTER_LOCK", "true")
+    monkeypatch.setenv("ROUTER_REQUIRE_AGENT_KEY", "true")
     monkeypatch.setenv("CLASSIFIER_BACKEND", "mock")
     with pytest.raises(ValueError, match="requires the policy to define 'routes'"):
         _make_hook(monkeypatch, log_path, policy_path=_write_policy(tmp_path))

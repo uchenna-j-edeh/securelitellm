@@ -71,3 +71,8 @@ litellm_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  # Each proxy caches key lookups in memory, 60 s by default, so a key blocked
+  # on one proxy keeps working on the other until the cache expires (measured:
+  # 61 s). A short TTL makes revoking an agent take effect within seconds, at
+  # the cost of more database reads (#148).
+  user_api_key_cache_ttl: 5

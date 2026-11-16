@@ -167,6 +167,7 @@ def test_router_lock_rejects_unsafe_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ROUTER_LOG_PATH", str(tmp_path / "d.jsonl"))
     monkeypatch.setenv("ROUTER_ENFORCE", "false")
     monkeypatch.setenv("ROUTER_LOCK", "true")
+    monkeypatch.setenv("ROUTER_REQUIRE_AGENT_KEY", "true")
     from router.config import RouterConfig
 
     with pytest.raises(ValueError, match="ROUTER_LOCK"):
@@ -181,6 +182,7 @@ def test_router_lock_allows_safe_config(tmp_path, monkeypatch):
     monkeypatch.setenv("ROUTER_ENFORCE", "true")
     monkeypatch.setenv("CLASSIFIER_BACKEND", "mock")
     monkeypatch.setenv("ROUTER_LOCK", "true")
+    monkeypatch.setenv("ROUTER_REQUIRE_AGENT_KEY", "true")
     from router.config import RouterConfig
 
     cfg = RouterConfig.from_env()

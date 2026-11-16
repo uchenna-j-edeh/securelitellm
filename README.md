@@ -406,7 +406,8 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `ROUTER_MODE` | `session` | `stateless`, `session` |
 | `ROUTER_LEVEL` | `L3` | `L0`, `L1`, `L2`, `L3` |
 | `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
-| `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false`, `classifier_backend=none`, `route_header=true`, or a policy without a routing table) at startup |
+| `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false`, `classifier_backend=none`, `route_header=true`, `require_agent_key=false`, or a policy without a routing table) at startup |
+| `ROUTER_REQUIRE_AGENT_KEY` | `false` | `true` accepts model requests only from a LiteLLM virtual key that belongs to a user (an agent). The master key, and keys with no user, are refused; the master key remains for administration. Needs LiteLLM's database. The demo stack enables it. See [Agent identity](#agent-identity-148) |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path; harness overlay sets `/logs/decisions.jsonl` |
 | `ROUTER_ROUTE_HEADER` | `false` | `true` returns `x-securelitellm-route: <route>; risk=<level>` on each response. Demo and debugging only: it tells a caller whether their content was flagged. The demo stack enables it |
 | `ROUTER_LITELLM_CONFIG` | unset (compose and the Docker image set `/app/config.yaml`) | path to the LiteLLM config; every model group the policy routing table names must exist in its `model_list`, or the proxy refuses to start |
@@ -620,6 +621,21 @@ See the [corpus scenario authoring guide](corpus/README.md) for the YAML schema,
 Session memory is the third switch: `ROUTER_MODE`, which the harness already runs both ways. `make eval-conditions` runs the matrix once per combination of `classifier` × `allowlist`, writing `eval/results/results_classifier-<on|off>_allowlist-<on|off>.csv`, then prints one table across them (`eval/metrics.py --summary`). With memory that covers all 8 combinations. Combinations the router refuses are skipped with a note.
 
 **Which combination to run.** The published 2026-10-27 experiment measured all 8 combinations once on 52 scenarios; the winner is session + classifier + allowlist, which catches 22 of 26 attack turns and flags 5 of 20 benign turns (4 of the 5 are legitimate sends to unlisted destinations). Results, what each layer contributes, and the limitations: [`docs/results/protection-combinations.md`](docs/results/protection-combinations.md).
+
+### Agent identity (#148)
+
+Each agent has its own LiteLLM virtual key, and every decision record names the agent that sent the request (`"agent": "<name>"`).
+
+- **Registering an agent.** An agent is a LiteLLM internal user whose `user_id` is the agent's name (`POST /user/new`), with a key issued to it (`POST /key/generate`). LiteLLM stores both in Postgres, so `DATABASE_URL` must be set. The hook reads the identity from LiteLLM's key authentication; nothing in a request body can change it.
+- **Limit the key to chat.** Issue agent keys with `allowed_routes: ["/v1/chat/completions", "/chat/completions"]`. An unrestricted LiteLLM key can create further keys for its own user, which would survive revoking the original (checked against LiteLLM 1.103.2).
+- **Limit the models.** Give the key only the model groups a client may ask for. The route groups (`hardened`, `quarantine`, `sensitive`) are chosen by the gateway and still work for that key; the agent can't request them directly.
+- **The master key becomes admin-only.** With `ROUTER_REQUIRE_AGENT_KEY=true` a model request from the master key, or from a key with no user, is refused and logged as `agent_unidentified`. `ROUTER_LOCK=true` requires this setting.
+- **Sessions are per key.** A session is bound to the key that started it, so one agent can't continue another agent's session.
+- **Revoking an agent.** `POST /key/block` with the master key. The proxy that receives the call refuses the key at once. Other proxies cache key lookups in memory, 60 seconds by default, and kept accepting a blocked key for 61 seconds when measured. Set `general_settings.user_api_key_cache_ttl` (the demo uses 5 seconds) to bound that delay.
+
+The demo stack does all of this: `make demo-dual-up` starts a Postgres container that only the two proxies can reach, registers the agent `demo-assistant` and writes its key to `deploy/.env` (`scripts/demo_agents.py`). `make demo-agent-block` and `make demo-agent-unblock` revoke and restore it.
+
+Not built yet: per-agent allowlists and tool grants keyed on this identity (#176), the end user an agent acts for (#149), and a database in the AWS deployment (`infra/` has none).
 
 **Destination allowlist (#167).** With `allowlist=on`, every destination in a send must be listed in the policy's `allowed_destinations`, wherever it came from: email to/cc/bcc (lists and display names included), URLs and endpoints, webhooks, Slack channels and message recipients. Entries are an exact address (`alice@example.com`; `@example.com` domain wildcards are rejected, so every allowed inbox has known owners), a URL host (`https://api.partner.com`, matched on the parsed host, so `https://api.partner.com@evil.io/` and `https://api.partner.com.evil.io/` are refused) or a channel (`"#team-reports"`). A send to anything else, or with no destination found, sets `destination_not_allowed`, which the bundled policy scores high: pre-call removes tools, post-call holds the generated call. Sends are tools in the exfil category plus tools of unknown capability; file writes and reads are not checked (#93). Decision records name a refused destination by domain, host or channel only (`unlisted_destinations`), never the full address. The list is validated at startup even when the allowlist is off. Being allowlisted means permitted, not trusted: the classifier and taint checks still apply. Every results row has a `controls` column, and the startup and decision records carry the switches, so each number traces back to the protections that produced it. A single run can also be overridden: `harness/matrix.py --controls classifier=off`. `ROUTER_LOCK=true` rejects `classifier=off`.
 

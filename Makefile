@@ -1,4 +1,4 @@
-.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-live eval-live-dry eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay gmail-auth
+.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-live eval-live-dry eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay demo-agent-block demo-agent-unblock gmail-auth
 
 # Well-known key used exclusively for E2E tests — never the production key.
 E2E_KEY := sk-test-e2e-key
@@ -122,6 +122,7 @@ BEDROCK_OVERLAY := $(if $(BEDROCK),-f deploy/docker-compose.bedrock.yml)
 demo-dual-up:
 	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)
 	@set -a; . ./deploy/.env; set +a; $(PYTHON) scripts/demo_policy.py
+	@$(PYTHON) scripts/demo_agents.py prepare
 	docker compose --env-file deploy/.env \
 	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
@@ -135,12 +136,22 @@ demo-dual-up:
 	               -f deploy/docker-compose.classifier.yml \
 	               -f deploy/docker-compose.demo-dual.yml $(BEDROCK_OVERLAY) \
 	               up -d --force-recreate --no-deps litellm litellm-stateless
+	# Register the demo agent and its key with the proxies' shared database (#148).
+	@$(PYTHON) scripts/demo_agents.py register
 
 # Replay a corpus scenario against both demo proxies (scripted turns, mock model):
 #   make demo-replay SCENARIO=sc-047
 demo-replay:
 	@test -n "$(SCENARIO)" || (echo "usage: make demo-replay SCENARIO=sc-047" >&2; exit 2)
 	@set -a; . ./deploy/.env; set +a; $(PYTHON) scripts/demo_replay.py $(SCENARIO)
+
+# Revoke or restore the demo agent's key (#148). The master key does this; the
+# agent's own key can't. Both proxies follow within the key-cache TTL (5 s).
+demo-agent-block:
+	@$(PYTHON) scripts/demo_agents.py block
+
+demo-agent-unblock:
+	@$(PYTHON) scripts/demo_agents.py unblock
 
 demo-dual-down:
 	docker compose --env-file deploy/.env \
