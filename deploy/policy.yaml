@@ -21,10 +21,14 @@
 #   user_named  on:  every send destination must appear in the user's message for
 #                    that turn (#212), so tool content can't choose a send.
 #               off: not checked.
+#   approvals   on:  a post-call hold becomes a pending approval (#174): an admin
+#                    approves or denies it, and an approved retry runs once.
+#               off: a held call is dropped.
 controls:
   classifier: on
   allowlist: off
   user_named: off
+  approvals: off
 
 # Where sends may go when allowlist is on (#167). Every destination in a send
 # is checked: email to/cc/bcc, URLs, webhooks, Slack channels, recipients. A

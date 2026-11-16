@@ -407,6 +407,7 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `ROUTER_LEVEL` | `L3` | `L0`, `L1`, `L2`, `L3` |
 | `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
 | `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false`, `classifier_backend=none`, `route_header=true`, `require_agent_key=false`, or a policy without a routing table) at startup |
+| `APPROVAL_TTL_SECONDS` | `900` | With `approvals=on`, how long a held action waits for a decision and then for the agent's retry. Must not exceed `SESSION_IDLE_TTL_SECONDS`. See [Held for approval](#held-for-approval-174) |
 | `ROUTER_REQUIRE_AGENT_KEY` | `false` | `true` accepts model requests only from a LiteLLM virtual key that belongs to a user (an agent). The master key, and keys with no user, are refused; the master key remains for administration. Needs LiteLLM's database. The demo stack enables it. See [Agent identity](#agent-identity-148) |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path; harness overlay sets `/logs/decisions.jsonl` |
 | `ROUTER_ROUTE_HEADER` | `false` | `true` returns `x-securelitellm-route: <route>; risk=<level>` on each response. Demo and debugging only: it tells a caller whether their content was flagged. The demo stack enables it |
@@ -621,6 +622,39 @@ See the [corpus scenario authoring guide](corpus/README.md) for the YAML schema,
 Session memory is the third switch: `ROUTER_MODE`, which the harness already runs both ways. `make eval-conditions` runs the matrix once per combination of `classifier` × `allowlist`, writing `eval/results/results_classifier-<on|off>_allowlist-<on|off>.csv`, then prints one table across them (`eval/metrics.py --summary`). With memory that covers all 8 combinations. Combinations the router refuses are skipped with a note.
 
 **Which combination to run.** The published 2026-10-27 experiment measured all 8 combinations once on 52 scenarios; the winner is session + classifier + allowlist, which catches 22 of 26 attack turns and flags 5 of 20 benign turns (4 of the 5 are legitimate sends to unlisted destinations). Results, what each layer contributes, and the limitations: [`docs/results/protection-combinations.md`](docs/results/protection-combinations.md).
+
+### Held for approval (#174)
+
+With `approvals=on` (policy `controls:` or `ROUTER_CONTROLS`), a post-call hold no longer just drops the generated tool calls. The whole assistant turn is stored as a pending approval, an admin approves or denies it, and after approval the agent's retry releases exactly those calls, once. Off by default.
+
+**For the agent.**
+
+1. A held response looks as before (`finish_reason: content_filter`, a notice in `content`, no tool calls), plus two headers: `x-securelitellm-approval: <id>` and `x-securelitellm-approval-status: pending`.
+2. To retry, send the same request again with `x-securelitellm-approval: <id>`, non-streaming. If the approval was granted, the response is the original tool turn: same call ids, byte-identical arguments, `finish_reason: tool_calls`. The model is not called again.
+3. Otherwise the response is held-shaped with `x-securelitellm-approval-status` set to `pending` (retry later), `denied` (give up), `expired` (ask again), `used` (it already ran) or `mismatch` / `unknown` (not valid for this session and key).
+
+**For the approver.** Admin routes on the proxy, authenticated by LiteLLM's key check and limited to admin roles; agent keys restricted to the chat routes (#148) can't reach them:
+
+| Route | Who | What |
+|---|---|---|
+| `GET /securelitellm/approvals` | `proxy_admin`, `proxy_admin_viewer` | Pending and approved items: agent, session, tools, unlisted destinations (domain only), rules, risk, time left, and the full tool arguments |
+| `POST /securelitellm/approvals/{approval_ref}/approve` | `proxy_admin` | Approve |
+| `POST /securelitellm/approvals/{approval_ref}/deny` | `proxy_admin` | Deny |
+
+**Guarantees.**
+
+- **Runs once at most.** The retry checks and marks the approval used in one locked step, so concurrent retries can't both replay it (tested with 20 at once). A shared store (#169) needs a single conditional `UPDATE ... RETURNING` for the same guarantee, never a cached status.
+- **Bound to who asked.** Only the session and API key that produced the hold can use it.
+- **Only what was approved.** The replayed calls are compared with a hash of the stored ids, names and raw arguments before release; a mismatch is held.
+- **A block still wins.** The retry is assessed like any request first; if its route blocks, the approval isn't used.
+- **Nothing forged from the client.** Pre-call drops any client-sent `mock_tool_calls` or `mock_response`, and the replay state lives inside the hook, not in request metadata.
+- **Streaming retries are refused without using the approval** (LiteLLM's replay path drops tool calls when streaming).
+- **A denial counts as one escalation; an expiry doesn't.** Expiry means nobody answered.
+- **Arguments live only in memory, only while needed.** They are deleted when the approval is used, denied or expires, and never logged. Logs identify an approval by `approval_ref` (a hash prefix); only the agent holds the raw id.
+
+`APPROVAL_TTL_SECONDS` (default 900) sets how long an approval stays pending or approved. Startup fails if it exceeds `SESSION_IDLE_TTL_SECONDS`, because the agent is idle while it waits and an approved retry would find its session expired.
+
+Limits: approvals live in the proxy's memory, so a restart loses them and replicas don't share them (#169). There's no notification yet; an approver polls the list. Only the admin approves: there is no separate approver identity, or approval by the user the agent acts for (#149).
 
 ### Agent identity (#148)
 

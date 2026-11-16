@@ -17,6 +17,10 @@ and stays there; this module covers the rest.
                   can't choose a send or where it goes. With the allowlist on,
                   a send goes only to listed destinations the user typed.
               off: not checked.
+  approvals   on: a post-call hold becomes a pending approval (#174,
+                  router/approvals.py). An admin approves or denies it; after
+                  approval the agent's retry replays the held calls once.
+              off: a held call is dropped (the default).
 
 Set in the policy's ``controls:`` section; ROUTER_CONTROLS overrides it, e.g.
 ``ROUTER_CONTROLS="classifier=off,allowlist=off"``. Unknown names or values
@@ -40,6 +44,7 @@ class Controls:
     classifier: bool = True
     allowlist: bool = False
     user_named: bool = False
+    approvals: bool = False
 
     def summary(self) -> dict[str, str]:
         """{"classifier": "on", ...} for startup and decision records."""

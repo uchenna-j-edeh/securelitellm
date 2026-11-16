@@ -26,6 +26,7 @@ are rejected. Logs carry session_ref (a hash prefix), never the raw id.
 
 import asyncio
 import copy
+import os
 import sys
 import time
 import uuid
@@ -42,6 +43,7 @@ from router.allowlist import (
     not_user_named,
     sinks_with_arguments,
 )
+from router.approvals import ApprovalError, ApprovalStore, ttl_from_env
 from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.controls import resolve_controls
@@ -86,6 +88,24 @@ _MISSING_PRE_CALL_LEVEL: RiskLevel = "elevated"  # fail closed if pre-call left 
 _MISSING_PRE_CALL_CLASS: DataClass = "sensitive"  # fail closed if pre-call left no class
 _SESSION_START_ROLES = frozenset({"system", "developer", "user"})
 _ISSUED_CACHE_MAX = 10_000  # request_id -> raw id, until the response headers are sent
+# Held for approval (#174). The agent sends the approval ID back in this request
+# header to retry; a response carries a new ID, or the status of the one sent.
+APPROVAL_HEADER = "x-securelitellm-approval"
+APPROVAL_STATUS_HEADER = "x-securelitellm-approval-status"
+APPROVALS_PATH = "/securelitellm/approvals"
+_GATEWAY_ONLY_FIELDS = ("mock_tool_calls", "mock_response")
+_DECIDING_ROLES = frozenset({"proxy_admin"})
+_VIEWING_ROLES = frozenset({"proxy_admin", "proxy_admin_viewer"})
+_APPROVAL_NOTICES = {
+    "pending": "this action is still waiting for approval; retry once it is approved",
+    "denied": "this action was denied by an approver; do not retry it",
+    "expired": "the approval for this action expired before it was used; ask again if it is "
+    "still needed",
+    "used": "this approval was already used; an approved action runs once",
+    "unknown": "this approval ID is not valid for this session and key",
+    "mismatch": "this approval ID is not valid for this session and key",
+    "replay_mismatch": "the replayed action did not match what was approved, so it was held",
+}
 
 
 @dataclass
@@ -108,6 +128,26 @@ def _session_header(data: dict) -> str | None:
     headers = data.get("metadata", {}).get("headers", {}) or {}
     value = headers.get(SESSION_HEADER)
     return value if value is None else str(value)
+
+
+def _approval_header(data: dict) -> str | None:
+    """Approval ID the agent sent to retry a held action, or None."""
+    headers = data.get("metadata", {}).get("headers", {}) or {}
+    value = headers.get(APPROVAL_HEADER)
+    return str(value).strip() if value else None
+
+
+def _role(user_api_key_dict: Any) -> str | None:
+    role = getattr(user_api_key_dict, "user_role", None)
+    role = getattr(role, "value", role)
+    return role if isinstance(role, str) else None
+
+
+def _remember(cache: OrderedDict, key: str, value: Any) -> None:
+    """Keep a per-request value until the post-call or headers hook takes it (bounded)."""
+    cache[key] = value
+    while len(cache) > _ISSUED_CACHE_MAX:
+        cache.popitem(last=False)
 
 
 def _api_key_owner(user_api_key_dict: Any) -> str:
@@ -259,13 +299,30 @@ class RouterHook(CustomLogger):
         if self.config.lock and self._routing.source == "legacy":
             raise ValueError("ROUTER_LOCK=true requires the policy to define 'routes' and 'matrix'")
         verify_model_groups(self._routing, self.config.litellm_config_path)
+        check_single_worker(
+            dict(os.environ),
+            session_mode=self.config.mode == "session",
+            approvals=self._controls.approvals,
+        )
         self._issued: OrderedDict[str, str] = OrderedDict()
+        # Held for approval (#174): only with approvals=on.
+        self._approvals: ApprovalStore | None = None
+        self._approval_headers: OrderedDict[str, dict[str, str]] = OrderedDict()
+        self._replays: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
+        self._refusals: OrderedDict[str, str] = OrderedDict()
+        if self._controls.approvals:
+            self._approvals = ApprovalStore(ttl_from_env(dict(os.environ), get_store().idle_ttl))
+            app, auth = _proxy_app_and_auth()
+            register_approval_routes(app, auth, self)
         self.decision_logger.emit(
             {
                 **self.config.startup_record(),
                 "controls": self._controls.summary(),
                 "routing": self._routing.summary(),
                 "tools": self._inventory.summary() if self._inventory is not None else None,
+                "approval_ttl_seconds": (
+                    int(self._approvals.ttl) if self._approvals is not None else None
+                ),
             }
         )
 
@@ -468,6 +525,7 @@ class RouterHook(CustomLogger):
         raw = self._issued.pop(data.get("litellm_call_id") or "", None)
         if raw:
             headers[SESSION_HEADER] = raw
+        headers.update(self._approval_headers.pop(data.get("litellm_call_id") or "", {}))
         if self.config.route_header:
             stamp = _route_stamp(data)
             if stamp is not None:
@@ -485,6 +543,11 @@ class RouterHook(CustomLogger):
 
         request_id = data.setdefault("litellm_call_id", str(uuid.uuid4()))
         messages = data.get("messages", [])
+        # Only the gateway may answer for the model (#174). LiteLLM already strips
+        # these from client bodies unless a key has allow_client_mock_response.
+        for field in _GATEWAY_ONLY_FIELDS:
+            data.pop(field, None)
+        self._log_expired_approvals()
         caller = caller_identity(user_api_key_dict)
         self._require_agent(caller, data, request_id)  # before a session is issued
         session = self._resolve_session(
@@ -631,6 +694,12 @@ class RouterHook(CustomLogger):
                 llm_provider="",
             )
 
+        approval_id = _approval_header(data)
+        if approval_id is not None and self._approvals is not None:
+            data = self._use_approval(
+                approval_id, data, session, caller.agent, user_api_key_dict, request_id
+            )
+
         if route.strips_tools:
             data = dict(data)
             data.pop("tools", None)
@@ -672,6 +741,20 @@ class RouterHook(CustomLogger):
         request_id = data.get("litellm_call_id") or ""
         messages = data.get("messages", [])
 
+        refused = self._refusals.pop(request_id, None)
+        if refused is not None:  # the retry's approval wasn't usable; nothing was generated
+            return _approval_notice_response(response, refused)
+        replay = self._replays.pop(request_id, None)
+        replay_ok = False
+        if replay is not None and self._approvals is not None:
+            replay_ok = self._approvals.verify_replay(replay[0], _turn_calls(response)[0])
+            if not replay_ok:
+                self._emit_approval("replay_mismatch", replay[0], None, None, request_id)
+                _remember(
+                    self._approval_headers, request_id, {APPROVAL_STATUS_HEADER: "replay_mismatch"}
+                )
+                return _approval_notice_response(response, "replay_mismatch")
+
         generated_calls = _extract_response_sinks(
             response, include_reads=True, inventory=self._inventory
         )
@@ -686,7 +769,8 @@ class RouterHook(CustomLogger):
         data_class = _pre_call_class(data) or _MISSING_PRE_CALL_CLASS
         pre_route = self._routing.resolve(pre_level or _MISSING_PRE_CALL_LEVEL, data_class)
         if not egress_sinks and pre_route.hold != "all":
-            return None  # read-only calls are released unless the route holds everything
+            # Read-only calls are released unless the route holds everything.
+            return _replayed_response(response, replay[1]) if replay_ok and replay else None
         caller = caller_identity(user_api_key_dict)
         session = self._resolve_session(
             data, request_id, user_api_key_dict, messages, "post_call", agent=caller.agent
@@ -764,8 +848,39 @@ class RouterHook(CustomLogger):
             store = get_store()
             for sink in egress_sinks:
                 store.record_sink(session_id, _public_sink(sink))
-            if assessed_level != "low":
+            if assessed_level != "low" and not replay_ok:  # the hold already counted
                 features["escalation_count"] = store.record_escalation(session_id)
+
+        final_action = output_action
+        approval: dict[str, Any] | None = None
+        pending_id: str | None = None
+        if replay_ok and replay is not None and output_action != "block":
+            final_action = "execute"  # approved: a block still wins
+            approval = {"approval_ref": replay[0], "event": "replayed"}
+        elif self._approvals is not None and self.config.enforce and output_action == "hold":
+            calls, content, eligible = _turn_calls(response)
+            if eligible and not any("malformed" in call for call in generated_calls):
+                pending_id, record = self._approvals.create(
+                    session_key=session_id,
+                    session_ref=session.ref,
+                    owner=_api_key_owner(user_api_key_dict),
+                    agent=caller.agent,
+                    calls=calls,
+                    content=content,
+                    summary={
+                        "tools": [call["function"]["name"] for call in calls],
+                        "unlisted_destinations": features.get("unlisted_destinations", []),
+                        "matched_rules": matched_rules,
+                        "risk_score": round(risk_score, 4),
+                        "risk_level": risk_level,
+                        "route": route.name,
+                    },
+                )
+                approval = {
+                    "approval_ref": record.ref,
+                    "event": "requested",
+                    "expires_in_seconds": int(self._approvals.ttl),
+                }
 
         self.decision_logger.emit(
             {
@@ -784,8 +899,9 @@ class RouterHook(CustomLogger):
                 "pre_call_risk_level": pre_level,
                 "data_class": data_class,
                 "route": route.name,
-                "action": output_action,
+                "action": final_action,
                 "policy_action": policy_action,
+                **({"approval": approval} if approval is not None else {}),
                 "matched_rules": matched_rules,
                 "enforce": self.config.enforce,
                 "tool_context": {
@@ -795,9 +911,9 @@ class RouterHook(CustomLogger):
             }
         )
 
-        if not self.config.enforce or output_action == "execute":
-            return None
-        if output_action == "block":
+        if not self.config.enforce or final_action == "execute":
+            return _replayed_response(response, replay[1]) if replay_ok and replay else None
+        if final_action == "block":
             import litellm.exceptions as _le
 
             raise _le.BadRequestError(
@@ -805,9 +921,147 @@ class RouterHook(CustomLogger):
                 model=data.get("model", ""),
                 llm_provider="",
             )
+        if pending_id is not None:
+            _remember(
+                self._approval_headers,
+                request_id,
+                {APPROVAL_HEADER: pending_id, APPROVAL_STATUS_HEADER: "pending"},
+            )
         return _hold_response_tool_calls(
-            response, risk_score, matched_rules or [f"route {route.name}"]
+            response,
+            risk_score,
+            matched_rules or [f"route {route.name}"],
+            pending=pending_id is not None,
         )
+
+    # ------------------------------------------------------------------
+    # Held for approval (#174)
+    # ------------------------------------------------------------------
+
+    def _use_approval(
+        self,
+        approval_id: str,
+        data: dict,
+        session: _Session,
+        agent: str | None,
+        user_api_key_dict: Any,
+        request_id: str,
+    ) -> dict:
+        """Claim an approval on retry; replay its calls, or answer why not.
+
+        The streaming check comes first so a streaming retry never uses the
+        approval: LiteLLM's mock path drops tool calls when streaming.
+        """
+        assert self._approvals is not None
+        if data.get("stream"):
+            self._emit_approval(
+                "replay_refused", None, session.ref, agent, request_id, status="streaming"
+            )
+            import litellm.exceptions as _le
+
+            raise _le.BadRequestError(
+                message="SecureLiteLLM: retry an approved action without streaming; "
+                "the approval has not been used",
+                model=data.get("model", ""),
+                llm_provider="",
+            )
+        claim = self._approvals.claim(
+            approval_id, session_key=session.key, owner=_api_key_owner(user_api_key_dict)
+        )
+        self._emit_approval(
+            "replay_claimed" if claim.ok else "replay_refused",
+            claim.ref,
+            session.ref,
+            agent,
+            request_id,
+            status=claim.status,
+        )
+        data = dict(data)
+        if claim.ok:
+            # LiteLLM returns these calls without calling the model (mock path),
+            # with their original ids and byte-identical arguments.
+            data["mock_tool_calls"] = claim.calls
+            _remember(self._replays, request_id, (claim.ref, claim.content))
+        else:
+            data["mock_response"] = "SecureLiteLLM approval not usable"  # replaced in post-call
+            _remember(self._refusals, request_id, claim.status)
+            _remember(self._approval_headers, request_id, {APPROVAL_STATUS_HEADER: claim.status})
+        return data
+
+    def _emit_approval(
+        self,
+        event: str,
+        ref: str | None,
+        session_ref: str | None,
+        agent: str | None,
+        request_id: str | None,
+        **extra: Any,
+    ) -> None:
+        self.decision_logger.emit(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "phase": "approval",
+                "event": event,
+                "approval_ref": ref,
+                "session_id": session_ref,
+                "agent": agent,
+                "request_id": request_id,
+                "mode": self.config.mode,
+                "level": self.config.level,
+                "controls": self._controls.summary(),
+                "features": {},
+                "action": event,
+                "matched_rules": [],
+                "enforce": self.config.enforce,
+                **extra,
+            }
+        )
+
+    def _log_expired_approvals(self) -> None:
+        if self._approvals is None:
+            return
+        for record in self._approvals.sweep():
+            self._emit_approval("expired", record.ref, record.session_ref, record.agent, None)
+
+    def approvals_list(self, user_api_key_dict: Any) -> dict[str, Any]:
+        """Admin API: approvals waiting for a decision or a retry, with full arguments."""
+        if self._approvals is None:
+            raise ApprovalError(404, "approvals are not enabled")
+        if _role(user_api_key_dict) not in _VIEWING_ROLES:
+            raise ApprovalError(403, "only an admin can view approvals")
+        self._log_expired_approvals()
+        return {
+            "approvals": [
+                {
+                    **record.public(with_arguments=True),
+                    "expires_in_seconds": self._approvals.expires_in(record),
+                }
+                for record in self._approvals.pending()
+            ]
+        }
+
+    def approvals_decide(self, ref: str, approve: bool, user_api_key_dict: Any) -> dict[str, Any]:
+        """Admin API: approve or deny a pending approval. A denial counts as an escalation."""
+        if self._approvals is None:
+            raise ApprovalError(404, "approvals are not enabled")
+        if _role(user_api_key_dict) not in _DECIDING_ROLES:
+            raise ApprovalError(403, "only an admin can decide approvals")
+        approver = getattr(user_api_key_dict, "user_id", None)
+        approver = approver if isinstance(approver, str) else None
+        record = self._approvals.decide(ref, approve=approve, approver=approver)
+        extra: dict[str, Any] = {"approver": approver}
+        if not approve and self.config.mode == "session":
+            extra["escalation_count"] = get_store().record_escalation(record.session_key)
+        self._emit_approval(
+            "approved" if approve else "denied",
+            record.ref,
+            record.session_ref,
+            record.agent,
+            None,
+            **extra,
+        )
+        self._log_expired_approvals()
+        return {**record.public(), "expires_in_seconds": self._approvals.expires_in(record)}
 
 
 def _output_action(
@@ -986,12 +1240,14 @@ def _hold_response_tool_calls(
     response: Any,
     risk_score: float,
     matched_rules: list[str],
+    pending: bool = False,
 ) -> Any:
     """Return a copy of a response with generated tool calls removed."""
     held = copy.deepcopy(response)
     reason = ", ".join(matched_rules) or "policy review"
+    purpose = "approval" if pending else "review"
     notice = (
-        "SecureLiteLLM held the generated tool call for review "
+        f"SecureLiteLLM held the generated tool call for {purpose} "
         f"(risk={risk_score:.3f}; rules={reason})."
     )
 
@@ -1004,6 +1260,156 @@ def _hold_response_tool_calls(
         if hasattr(choice, "finish_reason"):
             choice.finish_reason = "content_filter"
     return held
+
+
+def _turn_calls(response: Any) -> tuple[list[dict[str, Any]], str | None, bool]:
+    """The held assistant turn: (tool calls with raw arguments, content, eligible).
+
+    Eligible only for a single-choice response whose calls all have an id, a
+    name and string arguments: the whole turn is approved or denied as one unit.
+    """
+    choices = getattr(response, "choices", None) or []
+    if len(choices) != 1:
+        return [], None, False
+    message = getattr(choices[0], "message", None)
+    tool_calls = getattr(message, "tool_calls", None) or []
+    calls = []
+    for call in tool_calls:
+        function = getattr(call, "function", None)
+        name = getattr(function, "name", None)
+        arguments = getattr(function, "arguments", None)
+        call_id = getattr(call, "id", None)
+        if not (isinstance(name, str) and isinstance(arguments, str) and call_id):
+            return [], None, False
+        calls.append(
+            {
+                "id": call_id,
+                "type": getattr(call, "type", None) or "function",
+                "function": {"name": name, "arguments": arguments},
+            }
+        )
+    content = getattr(message, "content", None)
+    return calls, content if isinstance(content, str) else None, bool(calls)
+
+
+def _replayed_response(response: Any, content: str | None) -> Any:
+    """An approved replay, shaped like the original tool turn.
+
+    LiteLLM's mock path answers with finish_reason "stop" and filler text.
+    """
+    released = copy.deepcopy(response)
+    for choice in getattr(released, "choices", None) or []:
+        message = getattr(choice, "message", None)
+        if message is not None:
+            message.content = content
+        if hasattr(choice, "finish_reason"):
+            choice.finish_reason = "tool_calls"
+    return released
+
+
+def _approval_notice_response(response: Any, status: str) -> Any:
+    """A held-shaped answer to a retry whose approval can't be used."""
+    held = copy.deepcopy(response)
+    reason = _APPROVAL_NOTICES.get(status, _APPROVAL_NOTICES["unknown"])
+    for choice in getattr(held, "choices", None) or []:
+        message = getattr(choice, "message", None)
+        if message is not None:
+            message.tool_calls = None
+            message.content = f"SecureLiteLLM: {reason}."
+        if hasattr(choice, "finish_reason"):
+            choice.finish_reason = "content_filter"
+    return held
+
+
+_WORKER_ENV = ("NUM_WORKERS", "WEB_CONCURRENCY")
+
+
+def check_single_worker(environ: dict[str, str], *, session_mode: bool, approvals: bool) -> None:
+    """Refuse to start with in-process state across more than one worker.
+
+    Sessions, escalation counts and approvals live in this process's memory,
+    guarded by a lock that covers this process only. With several workers each
+    has its own copy: a follow-up request on another worker is rejected as an
+    unknown session, an approval can't be found or decided, and per-session
+    escalation is split. Until the shared store (#169) lands, these need one
+    worker. LiteLLM's CLI exports NUM_WORKERS for uvicorn, gunicorn and granian;
+    WEB_CONCURRENCY covers servers started outside it that honour it. A server
+    started some other way (e.g. ``uvicorn --workers N`` by hand) is not seen.
+    """
+    stateful = [
+        name
+        for name, on in (("ROUTER_MODE=session", session_mode), ("approvals: on", approvals))
+        if on
+    ]
+    if not stateful:
+        return
+    for var in _WORKER_ENV:
+        raw = environ.get(var, "").strip()
+        if not raw:
+            continue
+        try:
+            workers = int(raw)
+        except ValueError:
+            raise ValueError(f"{var} must be an integer, got {raw!r}") from None
+        if workers > 1:
+            raise ValueError(
+                f"{var}={workers}, but {' and '.join(stateful)} keep state in this process's "
+                "memory, which other workers can't see; run one worker until the shared "
+                "store (#169) lands"
+            )
+
+
+def _proxy_app_and_auth() -> tuple[Any, Any]:
+    """LiteLLM's proxy app and its key authentication (tests replace this)."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    return app, user_api_key_auth
+
+
+# app id -> the hook its approval routes serve. Routes are added once per app;
+# a later hook instance (tests) takes them over.
+_APPROVAL_ROUTE_HOOKS: dict[int, "RouterHook"] = {}
+
+
+def register_approval_routes(app: Any, auth_dependency: Any, hook: "RouterHook") -> None:
+    """Add the admin approval API to the proxy (#174).
+
+    Served by the same process as the hook, so it shares the approval store,
+    and authenticated by LiteLLM's own key check. Agent keys limited to the
+    chat routes (#148) are refused by LiteLLM before reaching these handlers;
+    the handlers also require an admin role.
+    """
+    first = id(app) not in _APPROVAL_ROUTE_HOOKS
+    _APPROVAL_ROUTE_HOOKS[id(app)] = hook
+    if not first:
+        return
+    from fastapi import Depends, HTTPException
+
+    def current() -> "RouterHook":
+        return _APPROVAL_ROUTE_HOOKS[id(app)]
+
+    async def list_approvals(auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        try:
+            return current().approvals_list(auth)
+        except ApprovalError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    async def approve(approval_ref: str, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        try:
+            return current().approvals_decide(approval_ref, True, auth)
+        except ApprovalError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    async def deny(approval_ref: str, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
+        try:
+            return current().approvals_decide(approval_ref, False, auth)
+        except ApprovalError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    app.add_api_route(APPROVALS_PATH, list_approvals, methods=["GET"])
+    app.add_api_route(APPROVALS_PATH + "/{approval_ref}/approve", approve, methods=["POST"])
+    app.add_api_route(APPROVALS_PATH + "/{approval_ref}/deny", deny, methods=["POST"])
 
 
 # Module-level instance — LiteLLM config callbacks must point at an instance, not a class.
