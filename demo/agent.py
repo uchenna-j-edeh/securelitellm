@@ -29,6 +29,10 @@ Security policy is enforced externally; your job is to complete the task."""
 
 
 SESSION_HEADER = "x-agent-run-id"
+# Held for approval (#174): a held response carries an approval ID; the agent
+# sends it back to retry once an approver has decided.
+APPROVAL_HEADER = "x-securelitellm-approval"
+APPROVAL_STATUS_HEADER = "x-securelitellm-approval-status"
 ROUTE_HEADER = "x-securelitellm-route"  # "<route>; risk=<level>" when the proxy enables it
 # Set by LiteLLM on every response: the deployment that actually answered,
 # whatever model name the client asked for.
@@ -99,11 +103,42 @@ def run_chat(
     "proxy_session" event for the caller to keep server-side; every other event
     carries only its non-secret session_ref.
     """
-    proxy_url = proxy_url or PROXY_URL
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_message})
+    yield from _agent_loop(messages, session_id, master_key, proxy_url or PROXY_URL)
 
+
+def resume_chat(
+    pending: dict,
+    session_id: str,
+    master_key: str = "",
+    proxy_url: str | None = None,
+) -> Generator[dict, None, None]:
+    """Continue a turn that was held for approval (#174).
+
+    *pending* is the "approval_pending" event's ``approval_id`` and
+    ``messages``. The held request is sent again with the approval ID. If the
+    action was approved, the gateway returns the held tool calls (not a new
+    model answer) and the loop runs them and carries on; otherwise it answers
+    with the approval's status.
+    """
+    yield from _agent_loop(
+        [dict(m) for m in pending["messages"]],
+        session_id,
+        master_key,
+        proxy_url or PROXY_URL,
+        approval_id=pending["approval_id"],
+    )
+
+
+def _agent_loop(
+    messages: list[dict],
+    session_id: str | None,
+    master_key: str,
+    proxy_url: str,
+    approval_id: str | None = None,
+) -> Generator[dict, None, None]:
     headers = {
         "Authorization": f"Bearer {master_key}",
         "Content-Type": "application/json",
@@ -113,6 +148,9 @@ def run_chat(
     ref = session_ref(session_id) if session_id else None
 
     for turn in range(MAX_TURNS):
+        request_headers = dict(headers)
+        if approval_id and turn == 0:  # only the retry of the held request carries it
+            request_headers[APPROVAL_HEADER] = approval_id
         payload: dict[str, Any] = {
             "model": MODEL,
             "messages": messages,
@@ -124,7 +162,7 @@ def run_chat(
             resp = httpx.post(
                 f"{proxy_url}/chat/completions",
                 json=payload,
-                headers=headers,
+                headers=request_headers,
                 timeout=60,
             )
         except Exception as exc:
@@ -195,7 +233,22 @@ def run_chat(
         tool_calls = message.get("tool_calls") or []
 
         if is_held(choice):
+            new_approval = resp.headers.get(APPROVAL_HEADER)
+            status = resp.headers.get(APPROVAL_STATUS_HEADER)
+            if status and not new_approval:  # a retry whose approval wasn't usable
+                yield _event("approval_status", status=status, message=content, session_ref=ref)
+                return
             yield _event("intercepted", action="hold", message=content, session_ref=ref)
+            if new_approval:
+                # The ID and the turn so far stay with the caller (server side);
+                # the browser only learns that an approval is pending.
+                yield _event(
+                    "approval_pending",
+                    approval_id=new_approval,
+                    messages=[dict(m) for m in messages],
+                    message=content,
+                    session_ref=ref,
+                )
             return
 
         if tool_calls:
