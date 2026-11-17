@@ -66,6 +66,10 @@ def prepare(path: Path | None = None) -> list[str]:
         "LITELLM_DB_PASSWORD": lambda: secrets.token_urlsafe(32),
         "DEMO_AGENT_ID": lambda: DEFAULT_AGENT_ID,
         "DEMO_AGENT_KEY": lambda: f"sk-agent-{secrets.token_urlsafe(40)}",
+        # Persistent session store (#169), used with SESSION_DB=1 make demo-dual-up.
+        "SESSION_DB_ADMIN_PASSWORD": lambda: secrets.token_urlsafe(32),
+        "SESSION_DB_PROXY_PASSWORD": lambda: secrets.token_urlsafe(32),
+        "SESSION_HMAC_KEY": lambda: secrets.token_urlsafe(48),
     }
     missing = {name: make() for name, make in wanted.items() if not values.get(name)}
     if missing:

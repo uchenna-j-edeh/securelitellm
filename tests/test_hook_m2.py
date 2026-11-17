@@ -563,7 +563,9 @@ async def test_new_session_with_prior_turns_is_rejected(hook_enforcing, log_path
     record = read_record(log_path)
     assert record["action"] == "block"
     assert record["matched_rules"] == ["session_start_with_history"]
-    assert sess_mod.get_store()._store == {}  # nothing issued
+    store = sess_mod.get_store()
+    if store.backend == "memory":  # the dict is the memory store's own
+        assert store._store == {}  # nothing issued
 
 
 @pytest.mark.asyncio

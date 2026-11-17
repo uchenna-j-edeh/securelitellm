@@ -9,6 +9,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Throwaway database for the Postgres session store tests (#169).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: sessions
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_SESSION_DB_URL: postgresql://postgres:test@127.0.0.1:5432/sessions
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +46,13 @@ jobs:
 
       - name: Unit tests
         run: uv run pytest tests/ -v --ignore=tests/test_e2e.py
+
+      # The same suite again with every fixture-built session store on Postgres:
+      # decisions must not depend on the backend (#169).
+      - name: Unit tests on the Postgres session store
+        env:
+          TEST_SESSION_BACKEND: postgres
+        run: uv run pytest tests/ -q --ignore=tests/test_e2e.py
 
   windows:
     runs-on: windows-latest

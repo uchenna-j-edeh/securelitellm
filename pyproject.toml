@@ -9,8 +9,13 @@ dependencies = [
     "uvicorn[standard]>=0.29.0",
     "pydantic>=2.7.0",
     "pyyaml>=6.0",
-    "redis>=5.0.0",
     "matplotlib>=3.11.2",
+]
+
+[project.optional-dependencies]
+# SESSION_STORE=postgres (#169). The LiteLLM proxy image already ships psycopg.
+postgres = [
+    "psycopg[binary]>=3.1",
 ]
 
 [dependency-groups]
@@ -24,6 +29,7 @@ dev = [
     "httpx>=0.27.0",
     "ruff>=0.4.0",
     "requests>=2.34.2",
+    "psycopg[binary]>=3.1",
 ]
 
 [tool.ruff]

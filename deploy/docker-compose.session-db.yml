@@ -1,0 +1,64 @@
+# Persistent session store overlay (#169): the session proxy keeps its sessions
+# in Postgres instead of its own memory, so taint and expired-id records
+# survive a proxy restart and could be shared by several proxies.
+#
+# Usage: SESSION_DB=1 make demo-dual-up   (add BEDROCK=1 as usual)
+#
+# - session-db is a separate database from LiteLLM's key store (agents-db):
+#   the proxy's login there can read and write the session and approval tables and
+#   nothing else, and holds no LiteLLM keys.
+# - session-db-migrate runs once per `up`: it creates the tables and the
+#   restricted proxy role with the admin login, then exits. The proxy itself
+#   never has rights to create or alter tables.
+# - The passwords and the HMAC key are generated into deploy/.env by
+#   `make demo-dual-up` (scripts/demo_agents.py prepare).
+# - SESSION_DB_ALLOW_PLAINTEXT=true is for this compose network only. Anywhere
+#   else the proxy refuses a connection without TLS (sslmode=require or
+#   stricter); production uses RDS with verify-full (infra/).
+#
+# With approvals on, the session proxy's held actions live in the same database.
+# The stateless proxy keeps no sessions and is unchanged (its approvals stay in
+# its own memory).
+
+services:
+  # Not published on the host: only the session proxy and the migration reach it.
+  session-db:
+    image: postgres@sha256:f377d590e5474681d4d7838635031a2b50647923b7abfa803ce9b5ff35d5c663  # 16-alpine
+    environment:
+      - POSTGRES_USER=sessions_admin
+      - POSTGRES_DB=sessions
+      - POSTGRES_PASSWORD=${SESSION_DB_ADMIN_PASSWORD:?Set SESSION_DB_ADMIN_PASSWORD in .env (make demo-dual-up does)}
+    volumes:
+      - session_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sessions_admin -d sessions"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  session-db-migrate:
+    image: ghcr.io/berriai/litellm@sha256:a69f5f0c56b868d2fdfce7abfb037fed947b70ede202047ffc19c14dc96ab90a
+    volumes:
+      - ..:/workspace:ro
+    working_dir: /workspace
+    entrypoint: ["/app/.venv/bin/python", "-m", "router.pg_session"]
+    command: ["migrate", "--grant-to", "securelitellm_proxy", "--role-password-env", "SESSION_DB_PROXY_PASSWORD"]
+    environment:
+      - SESSION_DB_ADMIN_URL=postgresql://sessions_admin:${SESSION_DB_ADMIN_PASSWORD:-}@session-db:5432/sessions
+      - SESSION_DB_PROXY_PASSWORD=${SESSION_DB_PROXY_PASSWORD:?Set SESSION_DB_PROXY_PASSWORD in .env (make demo-dual-up does)}
+    depends_on:
+      session-db:
+        condition: service_healthy
+
+  litellm:
+    environment:
+      - SESSION_STORE=postgres
+      - SESSION_DB_URL=postgresql://securelitellm_proxy:${SESSION_DB_PROXY_PASSWORD:-}@session-db:5432/sessions
+      - SESSION_HMAC_KEY=${SESSION_HMAC_KEY:?Set SESSION_HMAC_KEY in .env (make demo-dual-up does)}
+      - SESSION_DB_ALLOW_PLAINTEXT=true
+    depends_on:
+      session-db-migrate:
+        condition: service_completed_successfully
+
+volumes:
+  session_db:

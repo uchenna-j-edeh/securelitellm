@@ -1,4 +1,4 @@
-.PHONY: lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-live eval-live-dry eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay demo-agent-block demo-agent-unblock gmail-auth
+.PHONY: test-db-up test-db-down lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-live eval-live-dry eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay demo-agent-block demo-agent-unblock gmail-auth
 
 # Well-known key used exclusively for E2E tests — never the production key.
 E2E_KEY := sk-test-e2e-key
@@ -118,7 +118,9 @@ demo:
 # generated deploy/policy.demo.yaml; only their memory differs.
 # BEDROCK=1 adds the "bedrock" model group's AWS credentials (see
 # deploy/docker-compose.bedrock.yml); then run the UI with DEMO_MODEL=bedrock.
-BEDROCK_OVERLAY := $(if $(BEDROCK),-f deploy/docker-compose.bedrock.yml)
+# SESSION_DB=1 keeps the session proxy's sessions in Postgres (#169), so they
+# survive a proxy restart (see deploy/docker-compose.session-db.yml).
+DEMO_OVERLAYS := $(if $(BEDROCK),-f deploy/docker-compose.bedrock.yml) $(if $(SESSION_DB),-f deploy/docker-compose.session-db.yml)
 demo-dual-up:
 	@test -f deploy/.env || (echo "deploy/.env is missing; run 'make demo-setup' first" >&2; exit 2)
 	@set -a; . ./deploy/.env; set +a; $(PYTHON) scripts/demo_policy.py
@@ -126,7 +128,7 @@ demo-dual-up:
 	docker compose --env-file deploy/.env \
 	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
-	               -f deploy/docker-compose.demo-dual.yml $(BEDROCK_OVERLAY) up -d --build
+	               -f deploy/docker-compose.demo-dual.yml $(DEMO_OVERLAYS) up -d --build
 	# The proxies read router/ and policy.demo.yaml from a bind mount, so Compose
 	# sees nothing changed and leaves running containers alone. Recreate just the
 	# two proxies so a code or policy change takes effect (the classifier and
@@ -134,10 +136,22 @@ demo-dual-up:
 	docker compose --env-file deploy/.env \
 	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
-	               -f deploy/docker-compose.demo-dual.yml $(BEDROCK_OVERLAY) \
+	               -f deploy/docker-compose.demo-dual.yml $(DEMO_OVERLAYS) \
 	               up -d --force-recreate --no-deps litellm litellm-stateless
 	# Register the demo agent and its key with the proxies' shared database (#148).
 	@$(PYTHON) scripts/demo_agents.py register
+
+# Throwaway Postgres for the session store tests (#169). Then:
+#   TEST_SESSION_DB_URL=$(TEST_DB_URL) make test
+# Add TEST_SESSION_BACKEND=postgres to run every hook test on the Postgres store.
+TEST_DB_URL := postgresql://postgres:test@127.0.0.1:55432/sessions
+test-db-up:
+	docker run -d --name sllm-test-pg -e POSTGRES_PASSWORD=test -e POSTGRES_DB=sessions \
+	    -p 127.0.0.1:55432:5432 postgres:16-alpine
+	@echo "export TEST_SESSION_DB_URL=$(TEST_DB_URL)"
+
+test-db-down:
+	docker rm -f sllm-test-pg
 
 # Replay a corpus scenario against both demo proxies (scripted turns, mock model):
 #   make demo-replay SCENARIO=sc-047
@@ -157,7 +171,7 @@ demo-dual-down:
 	docker compose --env-file deploy/.env \
 	               -f deploy/docker-compose.yml \
 	               -f deploy/docker-compose.classifier.yml \
-	               -f deploy/docker-compose.demo-dual.yml down
+	               -f deploy/docker-compose.demo-dual.yml $(DEMO_OVERLAYS) down
 
 # Freeze corpus + env snapshot for reproducibility (#47)
 freeze:
