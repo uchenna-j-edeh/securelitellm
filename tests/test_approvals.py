@@ -415,8 +415,8 @@ async def test_an_expired_approval_does_not_count_against_the_agent(make_hook, l
     approval_id, ref = await _held(hook)
     hook.approvals_decide(ref, True, ADMIN)
     before = get_store().state(key("run-1")).escalation_count
-    record = hook._approvals.get(ref)
-    record.expires_at = 0  # time passes
+    now = hook._approvals._clock()
+    hook._approvals._clock = lambda: now + hook._approvals.ttl + 1  # time passes
 
     sent, result, headers = await _turn(hook, _request("req-2", approval_id))
     assert "mock_tool_calls" not in sent
@@ -644,6 +644,10 @@ def test_a_bad_worker_count_is_refused():
 
 
 def test_the_hook_refuses_to_start_with_approvals_on_several_workers(make_hook):
+    from router.session import get_store
+
+    if get_store().shared:
+        pytest.skip("with a shared store approvals may run on several workers (#169)")
     with pytest.raises(ValueError, match="approvals: on"):
         make_hook(mode="stateless", workers=4)
     assert make_hook(mode="stateless", workers=1) is not None

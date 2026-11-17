@@ -176,7 +176,8 @@ All Python dependencies are declared in `pyproject.toml`, resolved to exact vers
 | `fastapi` + `uvicorn` | Mock model server |
 | `pydantic` | Data validation |
 | `pyyaml` | Config file parsing |
-| `redis` | Optional session store backend (M2+) |
+| `psycopg` | Postgres driver for `SESSION_STORE=postgres` (dev group and the `postgres` extra; the LiteLLM proxy image already includes it) |
+| `cryptography` | Encrypts stored approval arguments with `SESSION_STORE=postgres` (installed with `litellm`) |
 | `pytest` + `pytest-asyncio` | Test suite |
 | `ruff` | Linter and formatter |
 | `httpx` | HTTP client for tests |
@@ -408,6 +409,11 @@ The router behaviour is controlled by environment variables (set in `deploy/dock
 | `ROUTER_ENFORCE` | `true` | `true`; use `false` only for audit experiments |
 | `ROUTER_LOCK` | `false` | `true` rejects unsafe configs (`enforce=false`, `classifier_backend=none`, `route_header=true`, `require_agent_key=false`, or a policy without a routing table) at startup |
 | `APPROVAL_TTL_SECONDS` | `900` | With `approvals=on`, how long a held action waits for a decision and then for the agent's retry. Must not exceed `SESSION_IDLE_TTL_SECONDS`. See [Held for approval](#held-for-approval-174) |
+| `SESSION_STORE` | `memory` | `memory` keeps sessions in the proxy process (lost on restart, one worker only). `postgres` keeps them in a database: they survive restarts and are shared by every worker. See [Persistent session store](#persistent-session-store-169) |
+| `SESSION_DB_URL` | unset (required with `postgres`) | Postgres URL for the proxy's own login. Must set `sslmode=require`, `verify-ca` or `verify-full` unless `SESSION_DB_ALLOW_PLAINTEXT=true` |
+| `SESSION_HMAC_KEY` | unset (required with `postgres`) | secret, at least 32 characters, that signs each stored session so a row changed inside the database is rejected |
+| `SESSION_DB_TIMEOUT_MS` | `2000` | connect and statement timeout. A call unanswered after twice this is abandoned and the request refused |
+| `SESSION_DB_ALLOW_PLAINTEXT` | `false` | `true` allows a database connection without TLS. Local compose networks only |
 | `ROUTER_REQUIRE_AGENT_KEY` | `false` | `true` accepts model requests only from a LiteLLM virtual key that belongs to a user (an agent). The master key, and keys with no user, are refused; the master key remains for administration. Needs LiteLLM's database. The demo stack enables it. See [Agent identity](#agent-identity-148) |
 | `ROUTER_LOG_PATH` | `-` (stdout) | any file path; harness overlay sets `/logs/decisions.jsonl` |
 | `ROUTER_ROUTE_HEADER` | `false` | `true` returns `x-securelitellm-route: <route>; risk=<level>` on each response. Demo and debugging only: it tells a caller whether their content was flagged. The demo stack enables it |
@@ -643,7 +649,7 @@ With `approvals=on` (policy `controls:` or `ROUTER_CONTROLS`), a post-call hold 
 
 **Guarantees.**
 
-- **Runs once at most.** The retry checks and marks the approval used in one locked step, so concurrent retries can't both replay it (tested with 20 at once). A shared store (#169) needs a single conditional `UPDATE ... RETURNING` for the same guarantee, never a cached status.
+- **Runs once at most.** The retry checks and marks the approval used in one locked step, so concurrent retries can't both replay it (tested with 20 at once). The Postgres store (#169) gives the same guarantee across replicas with a row lock, and never reads status from a cache.
 - **Bound to who asked.** Only the session and API key that produced the hold can use it.
 - **Only what was approved.** The replayed calls are compared with a hash of the stored ids, names and raw arguments before release; a mismatch is held.
 - **A block still wins.** The retry is assessed like any request first; if its route blocks, the approval isn't used.
@@ -654,7 +660,47 @@ With `approvals=on` (policy `controls:` or `ROUTER_CONTROLS`), a post-call hold 
 
 `APPROVAL_TTL_SECONDS` (default 900) sets how long an approval stays pending or approved. Startup fails if it exceeds `SESSION_IDLE_TTL_SECONDS`, because the agent is idle while it waits and an approved retry would find its session expired.
 
-Limits: approvals live in the proxy's memory, so a restart loses them and replicas don't share them (#169). There's no notification yet; an approver polls the list. Only the admin approves: there is no separate approver identity, or approval by the user the agent acts for (#149).
+Limits: with the default memory store, approvals live in the proxy's memory, so a restart loses them and replicas don't share them. `SESSION_STORE=postgres` keeps them in the database (see [Persistent session store](#persistent-session-store-169)). There's no notification yet; an approver polls the list. Only the admin approves: there is no separate approver identity, or approval by the user the agent acts for (#149).
+
+### Persistent session store (#169)
+
+By default (`SESSION_STORE=memory`) sessions live in the proxy process. A restart forgets every session, and a second worker or replica has its own separate copy, so the proxy refuses to start in session mode with more than one worker.
+
+With `SESSION_STORE=postgres` the session proxy keeps them in Postgres instead:
+
+- **Sessions survive a restart.** Taint, the tainted-content hashes, the sensitive flag, the escalation count and the recorded sinks are read back from the database. An agent's session carries on after a deploy; with the memory store its next request was refused as an unknown session.
+- **Expired IDs stay expired.** An expired session keeps a small record (its taint hashes and sinks wiped) for `SESSION_TOMBSTONE_TTL_SECONDS`, so reusing the ID is rejected after a restart too.
+- **Every worker and replica sees the same session.** Each change is one transaction that locks the session's row, so two replicas can't lose each other's taint (tested with four writers at once). The proxy may then run several workers, with approvals on too.
+- **No raw content is stored.** The table holds the SHA-256 of the session ID, the SHA-256 of tainted content, and for each sink its call ID, tool name, category and argument length. Never the session ID itself, tool output, arguments or destinations. Clean tool results aren't stored at all.
+- **Rows are signed.** Each row carries an HMAC (`SESSION_HMAC_KEY`) over the fields decisions depend on. A row changed in the database, for example `tainted` set back to false, fails the check and the session is rejected. This doesn't detect a row replaced by an older copy of itself.
+- **Approvals move with the sessions.** With `approvals: on`, held actions are kept in the same database. A pending approval survives a restart, a decision made on one replica is seen by the others, and an approved action is replayed at most once however many replicas the retries reach: each status change locks the approval's row (tested with six replicas retrying at once). Each row is signed, covering its status and the summary the approver is shown, so a row flipped to `approved` in the database replays nothing. The tool-call arguments have to be kept to replay them; they are stored AES-256-GCM encrypted under a key the database never sees, and deleted once the approval is used, denied or expires.
+- **It fails closed.** If the database is unreachable, slow or missing its tables, the request is refused with a 503 and a `session_store_unavailable` block is logged, in audit mode too. The proxy never falls back to an empty in-memory store, which would hand a tainted session a clean start. After a timeout it stops trying for two seconds so requests don't queue behind a dead database, then reconnects by itself.
+
+Set it up once with a database login that may create tables; the proxy's own login gets read and write on the session and approval tables and nothing else:
+
+```bash
+export SESSION_DB_PROXY_PASSWORD=...   # the password the proxy will use
+SESSION_DB_ADMIN_URL='postgresql://admin:...@db.example/sessions?sslmode=verify-full' \
+  python -m router.pg_session migrate --grant-to securelitellm_proxy --role-password-env SESSION_DB_PROXY_PASSWORD
+```
+
+Then start the proxy with `SESSION_STORE=postgres`, `SESSION_DB_URL` for that login, and `SESSION_HMAC_KEY`. The proxy checks the connection and the table version at startup and refuses to start if either is wrong.
+
+To try it in the demo: `SESSION_DB=1 make demo-dual-up` adds a separate sessions database and runs the migration (`deploy/docker-compose.session-db.yml`). Send a request, `docker restart deploy-litellm-1`, and the same session ID still works and is still tainted.
+
+Cost and limits:
+
+- A request reads its session about six times. The first read of each request phase comes from the database; for the next second the rest reuse that row from the proxy's own memory, kept in step with its own writes. Another replica's write is seen by the next request. Measured in the demo stack, a request spends about 1.5 ms in the store (4 to 5 ms without that reuse; 0.01 ms with the memory store). A locked update costs about 1.3 ms.
+- There is no Redis cache, by decision (2026-11). #169 first planned one in front of Postgres. Measured from the proxy, a Redis `GET` took 0.20 ms against 0.29 ms for the Postgres key lookup it would replace, which doesn't pay for a second store whose stale entries could hide taint. The deployment this targets is an internal company tool, not a high-volume internet-facing service, so Postgres alone is enough.
+- When Redis would come back: running several proxy replicas for many tenants. There its job would be LiteLLM's own shared state (rate limits, budgets, key cache across replicas), not session reads. Sessions and approvals would stay in Postgres, and that scale would also need connection pooling and a tenant boundary in these tables, which they don't have today.
+- Store calls are synchronous: while one is in flight, that worker handles nothing else. This is what the timeouts above bound.
+- The last-used time of a busy session is written at most once every 30 seconds, so a session can expire up to 30 seconds early, never late.
+- All replicas must share `SESSION_HMAC_KEY`; the approval signing and encryption keys are derived from it. Changing it invalidates every stored session and pending approval; there is no key rotation yet.
+- An approval's summary (tool names, destination labels such as `@example.test`, rule names) is stored unencrypted so approvers can list it.
+- An approval expires on time, but the `expired` log record for it can be up to 5 seconds late: each proxy asks the database for newly expired approvals at most that often, not on every request.
+- During a database freeze a request can take several seconds to be refused (the 4-second deadline, and LiteLLM may try the call a second time).
+
+To run the store's tests: `make test-db-up`, then `TEST_SESSION_DB_URL=postgresql://postgres:test@127.0.0.1:55432/sessions make test`. Add `TEST_SESSION_BACKEND=postgres` to run every hook test against the Postgres store.
 
 ### Agent identity (#148)
 

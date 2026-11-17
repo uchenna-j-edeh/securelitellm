@@ -27,10 +27,24 @@ id is simply unknown.
 Reaping happens lazily on access and in a periodic sweep over all sessions,
 so abandoned sessions do not accumulate.
 
+Backends (#169)
+---------------
+``SESSION_STORE=memory`` (default) keeps everything in this process: lost on
+restart, not shared between workers or replicas. ``SESSION_STORE=postgres``
+uses ``router.pg_session.PostgresSessionStore``: sessions and the records of
+expired ids survive restarts and are shared by every worker and replica. Both
+implement ``BaseSessionStore``; callers only see that interface.
+
+If the Postgres store can't be reached, calls raise ``SessionStoreUnavailable``
+and the request is refused. The store never falls back to memory, because a
+fresh empty store would hand a tainted session a clean start.
+
 Environment
 -----------
+SESSION_STORE                  memory (default) | postgres
 SESSION_IDLE_TTL_SECONDS       idle timeout      (default 1800 = 30 min)
 SESSION_TOMBSTONE_TTL_SECONDS  tombstone memory  (default 86400 = 24 h)
+SESSION_DB_URL, SESSION_HMAC_KEY   see router.pg_session (postgres only)
 """
 
 import hashlib
@@ -106,6 +120,24 @@ class SessionOwnerMismatch(SessionError):
         super().__init__(key, "x-agent-run-id belongs to a different API key")
 
 
+class SessionStoreUnavailable(SessionError):
+    """The session store can't be reached or answered wrongly. Fail closed."""
+
+    reason = "store_unavailable"
+
+    def __init__(self, message: str = "the session store is unavailable") -> None:
+        super().__init__("", message)
+
+
+class SessionTampered(SessionError):
+    """A stored session failed its integrity check (#169): it is not trusted."""
+
+    reason = "tampered"
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key, "session record failed its integrity check; start a new session")
+
+
 @dataclass
 class SessionState:
     session_id: str  # session_key(raw id), never the raw id
@@ -139,8 +171,66 @@ def _env_seconds(name: str, default: int) -> int:
     return value
 
 
-class SessionStore:
-    """Session state keyed by session_key(raw id). All methods take the key."""
+class BaseSessionStore:
+    """What the router needs from a session store. All methods take the key.
+
+    ``state`` and ``authorize`` return a snapshot to read from; change a
+    session only through the ``record_*`` / ``mark_*`` methods, so a shared
+    backend can make each change atomic.
+    """
+
+    backend = "base"
+    shared = False  # True if every worker and replica sees the same sessions
+
+    @property
+    def idle_ttl(self) -> float:
+        raise NotImplementedError
+
+    def check(self) -> None:
+        """Confirm the store is usable (startup). Raises SessionStoreUnavailable."""
+
+    def issue(self, owner: str = "") -> str:
+        raise NotImplementedError
+
+    def state(self, key: str) -> "SessionState":
+        raise NotImplementedError
+
+    def authorize(self, key: str, owner: str) -> "SessionState":
+        raise NotImplementedError
+
+    def record_source(self, key: str, source: dict[str, Any], *, taint: bool = True) -> None:
+        raise NotImplementedError
+
+    def record_sink(self, key: str, sink: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def mark_sensitive(self, key: str) -> None:
+        raise NotImplementedError
+
+    def record_escalation(self, key: str) -> int:
+        raise NotImplementedError
+
+    def expire(self, key: str, reason: str = "ended") -> None:
+        raise NotImplementedError
+
+    def sweep(self) -> None:
+        raise NotImplementedError
+
+
+def source_hash(source: dict[str, Any]) -> str:
+    """SHA-256 of a source's content: the only form of it a store may keep."""
+    content_hash = source.get("content_hash")
+    if not content_hash:
+        raw = str(source.get("content") or source.get("content_for_classifier", ""))
+        content_hash = hashlib.sha256(raw.encode()).hexdigest()
+    return str(content_hash)
+
+
+class SessionStore(BaseSessionStore):
+    """In-process session store, keyed by session_key(raw id)."""
+
+    backend = "memory"
+    shared = False
 
     def __init__(
         self,
@@ -162,10 +252,8 @@ class SessionStore:
 
     @classmethod
     def from_env(cls) -> "SessionStore":
-        return cls(
-            idle_ttl=_env_seconds("SESSION_IDLE_TTL_SECONDS", DEFAULT_IDLE_TTL),
-            tombstone_ttl=_env_seconds("SESSION_TOMBSTONE_TTL_SECONDS", DEFAULT_TOMBSTONE_TTL),
-        )
+        idle_ttl, tombstone_ttl = store_ttls_from_env()
+        return cls(idle_ttl=idle_ttl, tombstone_ttl=tombstone_ttl)
 
     def issue(self, owner: str = "") -> str:
         """Create a session and return its raw id. Only the key is retained."""
@@ -211,11 +299,7 @@ class SessionStore:
             s.sources.append(source)
             if taint:
                 s.tainted = True
-                content_hash = source.get("content_hash")
-                if not content_hash:
-                    raw = str(source.get("content") or source.get("content_for_classifier", ""))
-                    content_hash = hashlib.sha256(raw.encode()).hexdigest()
-                s.tainted_spans.append(str(content_hash))
+                s.tainted_spans.append(source_hash(source))
 
     def record_sink(self, key: str, sink: dict[str, Any]) -> None:
         """Record an egress-capable tool call observed after taint."""
@@ -289,9 +373,40 @@ class SessionStore:
                 del self._tombstones[key]
 
 
-# Module-level singleton shared across all hook instances in the same process.
-_store = SessionStore.from_env()
+STORE_BACKENDS = ("memory", "postgres")
 
 
-def get_store() -> SessionStore:
+def store_ttls_from_env() -> tuple[int, int]:
+    return (
+        _env_seconds("SESSION_IDLE_TTL_SECONDS", DEFAULT_IDLE_TTL),
+        _env_seconds("SESSION_TOMBSTONE_TTL_SECONDS", DEFAULT_TOMBSTONE_TTL),
+    )
+
+
+def store_from_env() -> BaseSessionStore:
+    """The store chosen by SESSION_STORE. A bad setting fails at startup."""
+    backend = os.environ.get("SESSION_STORE", "").strip().lower() or "memory"
+    if backend == "memory":
+        return SessionStore.from_env()
+    if backend == "postgres":
+        from router.pg_session import PostgresSessionStore
+
+        return PostgresSessionStore.from_env()
+    raise ValueError(f"SESSION_STORE must be one of {STORE_BACKENDS}, got {backend!r}")
+
+
+# One store per process, shared by all hook instances. Built on first use, not
+# at import: router.pg_session imports this module, so building a Postgres
+# store here would import it back while it is still loading. The hook calls
+# get_store() at startup, so a bad setting still stops the proxy from starting.
+_store: BaseSessionStore | None = None
+_store_lock = threading.Lock()
+
+
+def get_store() -> BaseSessionStore:
+    global _store
+    if _store is None:
+        with _store_lock:
+            if _store is None:
+                _store = store_from_env()
     return _store

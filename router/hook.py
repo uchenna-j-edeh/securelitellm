@@ -65,6 +65,7 @@ from router.sensitive import scan_messages
 from router.session import (
     SessionError,
     SessionExpired,
+    SessionStoreUnavailable,
     get_store,
     is_well_formed,
     session_key,
@@ -104,6 +105,7 @@ _APPROVAL_NOTICES = {
     "used": "this approval was already used; an approved action runs once",
     "unknown": "this approval ID is not valid for this session and key",
     "mismatch": "this approval ID is not valid for this session and key",
+    "tampered": "this approval failed its integrity check and can't be used",
     "replay_mismatch": "the replayed action did not match what was approved, so it was held",
 }
 
@@ -299,11 +301,18 @@ class RouterHook(CustomLogger):
         if self.config.lock and self._routing.source == "legacy":
             raise ValueError("ROUTER_LOCK=true requires the policy to define 'routes' and 'matrix'")
         verify_model_groups(self._routing, self.config.litellm_config_path)
+        session_mode = self.config.mode == "session"
         check_single_worker(
             dict(os.environ),
-            session_mode=self.config.mode == "session",
-            approvals=self._controls.approvals,
+            # A shared store (#169) is the same for every worker; memory is not.
+            # Approvals live wherever sessions do.
+            session_mode=session_mode and not get_store().shared,
+            approvals=self._controls.approvals and not get_store().shared,
         )
+        if session_mode or (self._controls.approvals and get_store().shared):
+            # A store that can't be reached or has no tables fails here, at
+            # startup, rather than on the first request.
+            get_store().check()
         self._issued: OrderedDict[str, str] = OrderedDict()
         # Held for approval (#174): only with approvals=on.
         self._approvals: ApprovalStore | None = None
@@ -311,7 +320,7 @@ class RouterHook(CustomLogger):
         self._replays: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
         self._refusals: OrderedDict[str, str] = OrderedDict()
         if self._controls.approvals:
-            self._approvals = ApprovalStore(ttl_from_env(dict(os.environ), get_store().idle_ttl))
+            self._approvals = _approval_store(ttl_from_env(dict(os.environ), get_store().idle_ttl))
             app, auth = _proxy_app_and_auth()
             register_approval_routes(app, auth, self)
         self.decision_logger.emit(
@@ -320,6 +329,10 @@ class RouterHook(CustomLogger):
                 "controls": self._controls.summary(),
                 "routing": self._routing.summary(),
                 "tools": self._inventory.summary() if self._inventory is not None else None,
+                "session_store": get_store().backend if session_mode else None,
+                "approval_store": (
+                    self._approvals.backend if self._approvals is not None else None
+                ),
                 "approval_ttl_seconds": (
                     int(self._approvals.ttl) if self._approvals is not None else None
                 ),
@@ -361,6 +374,8 @@ class RouterHook(CustomLogger):
         key = session_key(raw)
         try:
             get_store().authorize(key, owner)
+        except SessionStoreUnavailable:
+            raise  # not the caller's fault: refused and logged at the hook's entry points
         except SessionExpired as exc:
             raise _SessionViolation(
                 "expired", str(exc), ref=session_ref(raw), expired_reason=exc.reason
@@ -533,6 +548,52 @@ class RouterHook(CustomLogger):
         return headers or None
 
     async def async_pre_call_hook(
+        self,
+        user_api_key_dict: Any,
+        cache: Any,
+        data: dict,
+        call_type: str,
+    ) -> dict:
+        try:
+            return await self._pre_call(user_api_key_dict, cache, data, call_type)
+        except SessionStoreUnavailable as exc:
+            raise self._store_outage(exc, "pre_call", data, user_api_key_dict) from exc
+
+    def _store_outage(
+        self, exc: SessionStoreUnavailable, phase: str, data: dict, user_api_key_dict: Any
+    ) -> Exception:
+        """Log a session store outage and return the error that refuses the request.
+
+        Fail closed (#169), in audit mode too, wherever in the request the
+        store was needed: without it there is no session to judge the request
+        against, and a fresh one would hand a tainted session a clean start.
+        """
+        self.decision_logger.emit(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "phase": phase,
+                "session_id": None,
+                "agent": caller_identity(user_api_key_dict).agent,
+                "request_id": data.get("litellm_call_id") or "",
+                "mode": self.config.mode,
+                "level": self.config.level,
+                "controls": self._controls.summary(),
+                "features": {"session_violation": exc.reason},
+                "risk_score": 1.0,
+                "action": "block",
+                "matched_rules": [f"session_{exc.reason}"],
+                "enforce": self.config.enforce,
+            }
+        )
+        import litellm.exceptions as _le
+
+        return _le.ServiceUnavailableError(
+            message="SecureLiteLLM: the session store is unavailable; the request was refused",
+            model=data.get("model", ""),
+            llm_provider="",
+        )
+
+    async def _pre_call(
         self,
         user_api_key_dict: Any,
         cache: Any,
@@ -722,6 +783,18 @@ class RouterHook(CustomLogger):
         return data
 
     async def async_post_call_success_hook(
+        self,
+        user_api_key_dict: Any,
+        data: dict,
+        response: Any,
+    ) -> Any:
+        try:
+            return await self._post_call(user_api_key_dict, data, response)
+        except SessionStoreUnavailable as exc:
+            # The response is not released: its tool calls were never checked.
+            raise self._store_outage(exc, "post_call", data, user_api_key_dict) from exc
+
+    async def _post_call(
         self,
         user_api_key_dict: Any,
         data: dict,
@@ -1020,7 +1093,7 @@ class RouterHook(CustomLogger):
     def _log_expired_approvals(self) -> None:
         if self._approvals is None:
             return
-        for record in self._approvals.sweep():
+        for record in self._approvals.due_expiries():
             self._emit_approval("expired", record.ref, record.session_ref, record.agent, None)
 
     def approvals_list(self, user_api_key_dict: Any) -> dict[str, Any]:
@@ -1051,7 +1124,13 @@ class RouterHook(CustomLogger):
         record = self._approvals.decide(ref, approve=approve, approver=approver)
         extra: dict[str, Any] = {"approver": approver}
         if not approve and self.config.mode == "session":
-            extra["escalation_count"] = get_store().record_escalation(record.session_key)
+            try:
+                extra["escalation_count"] = get_store().record_escalation(record.session_key)
+            except SessionStoreUnavailable:
+                # The denial itself is already recorded and stands; only the
+                # session's escalation count could not be raised.
+                extra["escalation_count"] = None
+                extra["escalation_recorded"] = False
         self._emit_approval(
             "approved" if approve else "denied",
             record.ref,
@@ -1327,8 +1406,9 @@ _WORKER_ENV = ("NUM_WORKERS", "WEB_CONCURRENCY")
 def check_single_worker(environ: dict[str, str], *, session_mode: bool, approvals: bool) -> None:
     """Refuse to start with in-process state across more than one worker.
 
-    Sessions, escalation counts and approvals live in this process's memory,
-    guarded by a lock that covers this process only. With several workers each
+    With the memory session store, sessions, escalation counts and approvals
+    live in this process's memory, behind a lock that covers this process
+    only. (Pass ``False`` for both when the store is shared, #169.) With several workers each
     has its own copy: a follow-up request on another worker is rejected as an
     unknown session, an approval can't be found or decided, and per-session
     escalation is split. Until the shared store (#169) lands, these need one
@@ -1357,6 +1437,16 @@ def check_single_worker(environ: dict[str, str], *, session_mode: bool, approval
                 "memory, which other workers can't see; run one worker until the shared "
                 "store (#169) lands"
             )
+
+
+def _approval_store(ttl: float) -> Any:
+    """Approvals live where sessions do: Postgres with SESSION_STORE=postgres (#169)."""
+    store = get_store()
+    if store.backend == "postgres":
+        from router.pg_approvals import PostgresApprovalStore
+
+        return PostgresApprovalStore(store.database, store.secret, ttl)  # type: ignore[attr-defined]
+    return ApprovalStore(ttl)
 
 
 def _proxy_app_and_auth() -> tuple[Any, Any]:
@@ -1394,18 +1484,30 @@ def register_approval_routes(app: Any, auth_dependency: Any, hook: "RouterHook")
             return current().approvals_list(auth)
         except ApprovalError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except SessionStoreUnavailable as exc:
+            raise HTTPException(
+                status_code=503, detail="the approval store is unavailable"
+            ) from exc
 
     async def approve(approval_ref: str, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
         try:
             return current().approvals_decide(approval_ref, True, auth)
         except ApprovalError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except SessionStoreUnavailable as exc:
+            raise HTTPException(
+                status_code=503, detail="the approval store is unavailable"
+            ) from exc
 
     async def deny(approval_ref: str, auth: Any = Depends(auth_dependency)) -> dict[str, Any]:
         try:
             return current().approvals_decide(approval_ref, False, auth)
         except ApprovalError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+        except SessionStoreUnavailable as exc:
+            raise HTTPException(
+                status_code=503, detail="the approval store is unavailable"
+            ) from exc
 
     app.add_api_route(APPROVALS_PATH, list_approvals, methods=["GET"])
     app.add_api_route(APPROVALS_PATH + "/{approval_ref}/approve", approve, methods=["POST"])

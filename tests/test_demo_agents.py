@@ -22,7 +22,14 @@ def _env(tmp_path, text="LITELLM_MASTER_KEY=sk-local-master\n"):
 
 def test_prepare_adds_the_missing_settings_and_keeps_the_file_private(tmp_path):
     path = _env(tmp_path, "LITELLM_MASTER_KEY=sk-local-master")  # no trailing newline
-    assert demo_agents.prepare(path) == ["DEMO_AGENT_ID", "DEMO_AGENT_KEY", "LITELLM_DB_PASSWORD"]
+    assert demo_agents.prepare(path) == [
+        "DEMO_AGENT_ID",
+        "DEMO_AGENT_KEY",
+        "LITELLM_DB_PASSWORD",
+        "SESSION_DB_ADMIN_PASSWORD",
+        "SESSION_DB_PROXY_PASSWORD",
+        "SESSION_HMAC_KEY",
+    ]
     values = demo_agents._parse_env(path)
     assert values["LITELLM_MASTER_KEY"] == "sk-local-master"
     assert values["DEMO_AGENT_ID"] == "demo-assistant"

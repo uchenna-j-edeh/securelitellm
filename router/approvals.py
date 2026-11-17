@@ -16,8 +16,8 @@ Rules (from the design notes on #174)
   API key (agent) that produced it.
 - **Once at most.** ``claim`` checks and marks the approval used in one step
   under the store's lock, so two concurrent retries can't both replay it.
-  (A shared Postgres store, #169, needs a single conditional
-  ``UPDATE ... RETURNING`` for the same guarantee, never a cached status.)
+  (``router.pg_approvals`` gives the same guarantee across replicas with a
+  row lock in Postgres, #169, and never reads status from a cache.)
 - **Expiry is not denial.** An approval nobody answered expires; it doesn't
   count against the agent. A denial does (see the hook).
 - **Raw arguments live only here, and only while needed.** They are deleted
@@ -124,7 +124,7 @@ class Claim:
     """Outcome of a retry presenting an approval ID."""
 
     ok: bool
-    status: str  # the approval's status, or "unknown" / "mismatch"
+    status: str  # the approval's status, or "unknown" / "mismatch" / "tampered"
     ref: str
     calls: list[dict[str, Any]] = field(default_factory=list)
     content: str | None = None
@@ -139,6 +139,11 @@ class ApprovalError(Exception):
 
 
 class ApprovalStore:
+    """In-process approval store. ``router.pg_approvals`` is the shared one (#169)."""
+
+    backend = "memory"
+    shared = False
+
     def __init__(self, ttl: float = DEFAULT_APPROVAL_TTL, clock: Clock = time.monotonic) -> None:
         self._records: dict[str, Approval] = {}
         self._unlogged_expiries: list[Approval] = []
@@ -253,6 +258,11 @@ class ApprovalStore:
 
     def expires_in(self, record: Approval) -> int:
         return max(0, int(record.expires_at - self._clock()))
+
+    def due_expiries(self) -> list[Approval]:
+        """Expiries to log now. In memory this is just ``sweep()``; the shared
+        store limits how often it asks the database."""
+        return self.sweep()
 
     def sweep(self) -> list[Approval]:
         """Expire overdue approvals. Returns every expiry not yet reported, once."""

@@ -59,7 +59,9 @@ Dates assume a Dec 11 finish; change `MILESTONES` in `bootstrap_github.py` befor
 ```
 router/            # hook, session store, taint, policy
   hook.py          # LiteLLM CustomLogger w/ async_pre_call_hook
-  session.py       # per-run session store (in-mem, Redis optional)
+  session.py       # per-run session store (in-memory by default)
+  pg_session.py    # the same store in Postgres: survives restarts, shared by workers (#169)
+  pg_approvals.py  # held-for-approval turns in Postgres (#169, #174)
   taint.py         # source/sink model, propagation
   classifiers/     # adapter interface + promptguard2.py, llmguard.py
   policy.py        # risk score → action
