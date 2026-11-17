@@ -1,197 +1,188 @@
-# ---------------------------------------------------------------------------
-# CloudWatch log group — ECS ships container stdout here
-# ---------------------------------------------------------------------------
+# The proxy: one Fargate service (decision 4: one task, one AZ).
+# A task = the proxy container plus the DeBERTa classifier container, started
+# together with one private IP in the app subnet. The classifier is reached on
+# the task's localhost only and is never exposed to the network.
 
-resource "aws_cloudwatch_log_group" "litellm" {
+resource "aws_cloudwatch_log_group" "proxy" {
   name              = "/ecs/${local.name}"
-  retention_in_days = 30
+  retention_in_days = var.log_retention_days
 }
-
-# ---------------------------------------------------------------------------
-# IAM roles
-# ---------------------------------------------------------------------------
-
-data "aws_iam_policy_document" "ecs_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
-}
-
-# Execution role — ECS control plane uses this to pull the image and inject secrets
-resource "aws_iam_role" "ecs_execution" {
-  name               = "${local.name}-ecs-exec"
-  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_execution_managed" {
-  role       = aws_iam_role.ecs_execution.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-data "aws_iam_policy_document" "ecs_execution_secrets" {
-  statement {
-    actions = ["secretsmanager:GetSecretValue"]
-    resources = [
-      aws_secretsmanager_secret.litellm_master_key.arn,
-      aws_secretsmanager_secret.groq_api_key.arn,
-    ]
-  }
-}
-
-resource "aws_iam_role_policy" "ecs_execution_secrets" {
-  name   = "read-secrets"
-  role   = aws_iam_role.ecs_execution.id
-  policy = data.aws_iam_policy_document.ecs_execution_secrets.json
-}
-
-# Task role — the running container assumes this (S3 write for decision logs)
-resource "aws_iam_role" "ecs_task" {
-  name               = "${local.name}-ecs-task"
-  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
-}
-
-data "aws_iam_policy_document" "ecs_task_s3" {
-  statement {
-    actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.decision_logs.arn}/decisions/*"]
-  }
-}
-
-resource "aws_iam_role_policy" "ecs_task_s3" {
-  name   = "decision-logs-s3"
-  role   = aws_iam_role.ecs_task.id
-  policy = data.aws_iam_policy_document.ecs_task_s3.json
-}
-
-# ---------------------------------------------------------------------------
-# ECS cluster + Fargate task + service
-# ---------------------------------------------------------------------------
 
 resource "aws_ecs_cluster" "main" {
   name = local.name
 }
 
-resource "aws_ecs_task_definition" "litellm" {
-  family                   = local.name
+locals {
+  proxy_image      = "${aws_ecr_repository.app["proxy"].repository_url}:${var.image_tag}"
+  classifier_image = "${aws_ecr_repository.app["classifier"].repository_url}:${var.image_tag}"
+  log_options = {
+    "awslogs-group"  = aws_cloudwatch_log_group.proxy.name
+    "awslogs-region" = var.aws_region
+  }
+}
+
+resource "aws_ecs_task_definition" "proxy" {
+  family                   = "${local.name}-proxy"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = var.task_cpu
   memory                   = var.task_memory
-  execution_role_arn       = aws_iam_role.ecs_execution.arn
-  task_role_arn            = aws_iam_role.ecs_task.arn
+  execution_role_arn       = aws_iam_role.proxy_execution.arn
+  task_role_arn            = aws_iam_role.proxy_task.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
 
   container_definitions = jsonencode([
-    # Sensitive-data model (#181): requests carrying secrets or personal data
-    # are served here, inside the task, and never reach the hosted provider.
-    # Ollama listens on the task's localhost only (no port mapping, not behind
-    # the load balancer). It pulls the model at start; litellm waits for it,
-    # and a failed pull stops the task rather than starting without the model.
     {
-      name       = "ollama"
-      image      = var.ollama_image
-      essential  = true
-      entryPoint = ["/bin/sh", "-c"]
-      command = [
-        "ollama serve & until ollama list >/dev/null 2>&1; do sleep 1; done; ollama pull ${var.sensitive_model} && wait"
-      ]
+      name      = "classifier"
+      image     = local.classifier_image
+      essential = true
       environment = [
-        { name = "OLLAMA_HOST", value = "127.0.0.1:11434" },
+        # The model is in the image (BAKE_MODEL=true); the task has no internet.
+        { name = "TRANSFORMERS_CACHE", value = "/opt/model" },
+        { name = "HF_HUB_OFFLINE", value = "1" },
+        { name = "TRANSFORMERS_OFFLINE", value = "1" },
+        { name = "CLASSIFIER_MAX_LENGTH", value = "512" },
       ]
       healthCheck = {
-        command     = ["CMD-SHELL", "ollama show ${var.sensitive_model} >/dev/null 2>&1 || exit 1"]
+        command     = ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
         interval    = 15
         timeout     = 5
         retries     = 5
-        startPeriod = 300
+        startPeriod = 120
       }
       logConfiguration = {
         logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.litellm.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "ollama"
-        }
+        options   = merge(local.log_options, { "awslogs-stream-prefix" = "classifier" })
       }
     },
     {
-      name      = "litellm"
-      image     = "${aws_ecr_repository.app.repository_url}:latest"
+      name      = "proxy"
+      image     = local.proxy_image
       essential = true
-
       portMappings = [
         { containerPort = 4000, protocol = "tcp" }
       ]
-
-      # The sensitive model group (litellm_config_prod.yaml) is the sidecar.
       dependsOn = [
-        { containerName = "ollama", condition = "HEALTHY" }
+        { containerName = "classifier", condition = "HEALTHY" }
       ]
-
-      # Non-secret config — safe to store in plain env vars
       environment = [
-        { name = "ROUTER_MODE",           value = var.router_mode },
-        { name = "ROUTER_LEVEL",          value = var.router_level },
-        { name = "ROUTER_ENFORCE",        value = var.router_enforce },
-        { name = "CLASSIFIER_BACKEND",    value = var.classifier_backend },
-        { name = "PROMPTGUARD_THRESHOLD", value = var.promptguard_threshold },
-        { name = "POLICY_PATH",           value = "/workspace/deploy/policy.yaml" },
-        { name = "ROUTER_LOG_PATH",       value = "-" },   # stdout → CloudWatch
-        { name = "PYTHONPATH",            value = "/workspace" },
+        { name = "ROUTER_MODE", value = "session" },
+        { name = "ROUTER_LEVEL", value = "L3" },
+        { name = "ROUTER_ENFORCE", value = "true" },
+        { name = "ROUTER_LOCK", value = "true" },
+        { name = "ROUTER_REQUIRE_AGENT_KEY", value = "true" },
+        { name = "CLASSIFIER_BACKEND", value = "local" },
+        { name = "LOCAL_CLASSIFIER_URL", value = "http://127.0.0.1:8080" },
+        { name = "SESSION_STORE", value = "postgres" },
+        { name = "POLICY_PATH", value = "/workspace/deploy/${var.policy_file}" },
+        { name = "ROUTER_LOG_PATH", value = "-" }, # stdout -> CloudWatch
+        { name = "AWS_REGION_NAME", value = var.aws_region },
+        # Use the price list in the image: the task can't reach GitHub.
+        { name = "LITELLM_LOCAL_MODEL_COST_MAP", value = "True" },
       ]
-
-      # Secrets pulled from Secrets Manager at task start — never visible in task def
       secrets = [
-        {
-          name      = "LITELLM_MASTER_KEY"
-          valueFrom = aws_secretsmanager_secret.litellm_master_key.arn
-        },
-        {
-          name      = "GROQ_API_KEY"
-          valueFrom = aws_secretsmanager_secret.groq_api_key.arn
-        },
+        { name = "LITELLM_MASTER_KEY", valueFrom = aws_secretsmanager_secret.app["master_key"].arn },
+        { name = "LITELLM_SALT_KEY", valueFrom = aws_secretsmanager_secret.app["salt_key"].arn },
+        { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.app["database_url"].arn },
+        { name = "SESSION_DB_URL", valueFrom = aws_secretsmanager_secret.app["session_db_url"].arn },
+        { name = "SESSION_HMAC_KEY", valueFrom = aws_secretsmanager_secret.app["session_hmac_key"].arn },
       ]
-
       logConfiguration = {
         logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.litellm.name
-          "awslogs-region"        = var.aws_region
-          "awslogs-stream-prefix" = "litellm"
-        }
+        options   = merge(local.log_options, { "awslogs-stream-prefix" = "proxy" })
       }
     }
   ])
 }
 
-resource "aws_ecs_service" "litellm" {
-  name            = local.name
+# Prepares the database (deploy/db_setup.py). The deploy workflow runs it, and
+# waits for it to succeed, before updating the service.
+resource "aws_ecs_task_definition" "db_setup" {
+  family                   = "${local.name}-db-setup"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.db_setup_execution.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([
+    {
+      name       = "db-setup"
+      image      = local.proxy_image
+      essential  = true
+      entryPoint = ["/app/.venv/bin/python", "/workspace/deploy/db_setup.py"]
+      environment = [
+        { name = "DB_HOST", value = aws_db_instance.main.address },
+        { name = "DB_PORT", value = tostring(aws_db_instance.main.port) },
+      ]
+      secrets = [
+        # The whole RDS-managed secret: JSON with username and password.
+        { name = "DB_ADMIN_SECRET", valueFrom = aws_db_instance.main.master_user_secret[0].secret_arn },
+        { name = "LITELLM_DB_PASSWORD", valueFrom = aws_secretsmanager_secret.app["litellm_db_password"].arn },
+        { name = "SESSION_DB_PROXY_PASSWORD", valueFrom = aws_secretsmanager_secret.app["session_db_proxy_password"].arn },
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options   = merge(local.log_options, { "awslogs-stream-prefix" = "db-setup" })
+      }
+    }
+  ])
+}
+
+resource "aws_ecs_service" "proxy" {
+  name            = "${local.name}-proxy"
   cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.litellm.arn
+  task_definition = aws_ecs_task_definition.proxy.arn
   launch_type     = "FARGATE"
-  desired_count   = 1
+  desired_count   = var.desired_count
+
+  # Start the new task and wait until it is healthy before stopping the old
+  # one, so a deploy doesn't interrupt users; roll back if it never gets there.
+  deployment_minimum_healthy_percent = 100
+  deployment_maximum_percent         = 200
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+  health_check_grace_period_seconds = 180
 
   network_configuration {
-    subnets          = aws_subnet.public[*].id
-    security_groups  = [aws_security_group.ecs.id]
-    assign_public_ip = true
+    subnets          = [aws_subnet.app.id]
+    security_groups  = [aws_security_group.tasks.id]
+    assign_public_ip = false
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.litellm.arn
-    container_name   = "litellm"
+    target_group_arn = aws_lb_target_group.proxy.arn
+    container_name   = "proxy"
     container_port   = 4000
   }
 
+  # Everything a task needs before it can start. Without the secret values,
+  # the first apply created the service minutes before the secrets had values
+  # (they wait for the database address), and its tasks failed with
+  # ResourceNotFoundException (found in the 2026-11-17 dry run).
   depends_on = [
     aws_lb_listener.https,
-    aws_iam_role_policy_attachment.ecs_execution_managed,
+    aws_iam_role_policy_attachment.proxy_execution_managed,
+    aws_iam_role_policy.proxy_execution_secrets,
+    aws_secretsmanager_secret_version.app,
+    aws_vpc_endpoint.interface,
+    aws_vpc_endpoint.s3,
   ]
 
-  # Prevent Terraform from reverting manual image tag changes done by the deploy workflow
+  # The deploy workflow registers a new revision per release (new image tags).
+  # Terraform changes to the task definition reach the service through the
+  # next deploy, which starts from the latest registered revision.
   lifecycle {
     ignore_changes = [task_definition]
   }

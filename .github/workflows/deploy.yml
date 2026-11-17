@@ -1,5 +1,8 @@
 name: Deploy to AWS
 
+# Builds both images, prepares the database, then rolls the proxy service.
+# Infrastructure (infra/) is applied separately with Terraform.
+
 on:
   push:
     branches: [main]
@@ -9,23 +12,34 @@ permissions:
   id-token: write   # required for OIDC token
   contents: read
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
-    name: Build → ECR → ECS
+    name: Build → ECR → db-setup → ECS
     if: ${{ vars.AWS_DEPLOY_ENABLED == 'true' }}
     runs-on: ubuntu-latest
-    environment: production   # gates on environment protection rules if configured
+    # The AWS role trusts only jobs in this environment (infra/iam.tf).
+    environment: production
+
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+      ECS_DB_SETUP_TASK_FAMILY: ${{ secrets.ECS_DB_SETUP_TASK_FAMILY }}
+      TAG: sha-${{ github.sha }}
 
     steps:
       - name: Validate deployment configuration
         env:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
           ECR_REPOSITORY_NAME: ${{ secrets.ECR_REPOSITORY_NAME }}
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
+          ECR_CLASSIFIER_REPOSITORY_NAME: ${{ secrets.ECR_CLASSIFIER_REPOSITORY_NAME }}
         run: |
-          for name in AWS_ROLE_ARN AWS_REGION ECR_REPOSITORY_NAME ECS_CLUSTER ECS_SERVICE; do
+          for name in AWS_ROLE_ARN AWS_REGION ECR_REPOSITORY_NAME ECR_CLASSIFIER_REPOSITORY_NAME \
+                      ECS_CLUSTER ECS_SERVICE ECS_DB_SETUP_TASK_FAMILY; do
             if [ -z "${!name}" ]; then
               echo "Missing required GitHub Actions secret: $name"
               exit 1
@@ -45,36 +59,78 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Docker image
+      - name: Build and push images
+        id: images
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          SHA_TAG: sha-${{ github.sha }}
+          PROXY_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
+          CLASSIFIER_REPOSITORY: ${{ secrets.ECR_CLASSIFIER_REPOSITORY_NAME }}
         run: |
+          proxy="$REGISTRY/$PROXY_REPOSITORY:$TAG"
+          classifier="$REGISTRY/$CLASSIFIER_REPOSITORY:$TAG"
           # Build from repo root so COPY router/ and COPY deploy/ resolve correctly
-          docker build -f deploy/Dockerfile \
-            -t "$REGISTRY/$REPOSITORY:$SHA_TAG" \
-            -t "$REGISTRY/$REPOSITORY:latest" \
-            .
-          docker push "$REGISTRY/$REPOSITORY:$SHA_TAG"
-          docker push "$REGISTRY/$REPOSITORY:latest"
-          echo "image=$REGISTRY/$REPOSITORY:$SHA_TAG" >> "$GITHUB_OUTPUT"
+          docker build -f deploy/Dockerfile -t "$proxy" .
+          # The task has no internet: the classifier's model is baked in.
+          docker build --build-arg BAKE_MODEL=true -t "$classifier" deploy/classifier
+          docker push "$proxy"
+          docker push "$classifier"
+          echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
+          echo "classifier=$classifier" >> "$GITHUB_OUTPUT"
 
-      - name: Force new ECS deployment
+      # Each release is a new task definition revision naming exactly these
+      # images (tags are immutable), so rolling back = the previous revision.
+      # Starting from the latest revision keeps whatever Terraform last set.
+      - name: Register task definition revisions
+        id: revisions
         env:
-          ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          ECS_SERVICE: ${{ secrets.ECS_SERVICE }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
+          PROXY_IMAGE: ${{ steps.images.outputs.proxy }}
+          CLASSIFIER_IMAGE: ${{ steps.images.outputs.classifier }}
         run: |
-          aws ecs update-service \
-            --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --force-new-deployment \
-            --region "$AWS_REGION"
+          register() {  # family, jq filter
+            aws ecs describe-task-definition --task-definition "$1" --query taskDefinition --output json \
+              | jq "$2 | {family, taskRoleArn, executionRoleArn, networkMode, containerDefinitions,
+                          volumes, requiresCompatibilities, cpu, memory, runtimePlatform}
+                     | with_entries(select(.value != null))" > "$RUNNER_TEMP/$1.json"
+            aws ecs register-task-definition --cli-input-json "file://$RUNNER_TEMP/$1.json" \
+              --query taskDefinition.taskDefinitionArn --output text
+          }
+          service_family=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' --output text | sed 's#.*/##; s#:[0-9]*$##')
+          proxy_arn=$(register "$service_family" '.containerDefinitions |= map(
+            if .name == "proxy" then .image = env.PROXY_IMAGE
+            elif .name == "classifier" then .image = env.CLASSIFIER_IMAGE else . end)')
+          setup_arn=$(register "$ECS_DB_SETUP_TASK_FAMILY" '.containerDefinitions |= map(.image = env.PROXY_IMAGE)')
+          echo "proxy=$proxy_arn" >> "$GITHUB_OUTPUT"
+          echo "db_setup=$setup_arn" >> "$GITHUB_OUTPUT"
 
-          echo "Waiting for service to stabilise..."
-          aws ecs wait services-stable \
-            --cluster "$ECS_CLUSTER" \
-            --services "$ECS_SERVICE" \
-            --region "$AWS_REGION"
-          echo "Deploy complete."
+      # Create or update the databases and logins (deploy/db_setup.py) before
+      # any new proxy starts. A failure stops the deploy; the old proxy keeps running.
+      - name: Prepare the database
+        env:
+          DB_SETUP_ARN: ${{ steps.revisions.outputs.db_setup }}
+        run: |
+          network=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].networkConfiguration' --output json)
+          task=$(aws ecs run-task --cluster "$ECS_CLUSTER" --launch-type FARGATE \
+            --task-definition "$DB_SETUP_ARN" --network-configuration "$network" \
+            --query 'tasks[0].taskArn' --output text)
+          echo "db-setup task: $task"
+          aws ecs wait tasks-stopped --cluster "$ECS_CLUSTER" --tasks "$task"
+          code=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          if [ "$code" != "0" ]; then
+            reason=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$task" \
+              --query 'tasks[0].stoppedReason' --output text)
+            echo "db-setup failed (exit $code): $reason. See the db-setup/ streams in the proxy log group."
+            exit 1
+          fi
+
+      - name: Roll the proxy service
+        env:
+          PROXY_ARN: ${{ steps.revisions.outputs.proxy }}
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" \
+            --task-definition "$PROXY_ARN" > /dev/null
+          echo "Waiting for the new task to be healthy (the old one stops after)..."
+          aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE"
+          echo "Deployed $PROXY_ARN"

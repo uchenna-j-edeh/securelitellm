@@ -1,39 +1,40 @@
-# Production LiteLLM config — no mock-model entry (mock is local dev only).
-# Secrets injected by ECS as env vars; never hardcode values here.
+# Production LiteLLM config (deploy/Dockerfile copies it to /app/config.yaml).
+#
+# Every route is served by Amazon Bedrock in this AWS account
+# (infra/DESIGN.md, decision 3), reached through a VPC endpoint. Credentials
+# come from the ECS task role, which may invoke only the models listed in
+# infra/variables.tf (bedrock_model_ids); keep the two in step.
+#
+# Clients ask for "llm". The router's policy (deploy/policy.yaml) sends risky
+# or sensitive turns to the hardened, quarantine or sensitive groups instead.
 
 model_list:
-  - model_name: groq
-    litellm_params:
-      model: groq/qwen/qwen3.8-27b
-      api_key: os.environ/GROQ_API_KEY
-
   - model_name: llm
     litellm_params:
-      model: groq/qwen/qwen3.8-27b
-      api_key: os.environ/GROQ_API_KEY
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: os.environ/AWS_REGION_NAME
+    model_info:
+      supports_function_calling: true
 
-  # Routing tier (#140): requests at elevated risk are sent to this group.
-  # Same model as standard for now; the tier's protection comes from the
-  # controls the hook enforces for the route.
   - model_name: hardened
     litellm_params:
-      model: groq/qwen/qwen3.8-27b
-      api_key: os.environ/GROQ_API_KEY
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: os.environ/AWS_REGION_NAME
+    model_info:
+      supports_function_calling: true
 
-  # Routing tier (#183): high-risk requests, tools removed. Groq until a
-  # self-hosted model exists, so production needs no extra infrastructure.
   - model_name: quarantine
     litellm_params:
-      model: groq/qwen/qwen3.8-27b
-      api_key: os.environ/GROQ_API_KEY
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: os.environ/AWS_REGION_NAME
 
-  # Sensitive data (#181): requests carrying secrets or personal data never
-  # go to Groq. They are served by the Ollama sidecar in the same ECS task
-  # (infra/ecs.tf), reachable only on the task's localhost.
+  # Sensitive data (#181) is cleared for this group. On Bedrock in this
+  # account, prompts are not stored or used for training, and the data stays
+  # in the account's region. A self-hosted model would keep it inside the task.
   - model_name: sensitive
     litellm_params:
-      model: ollama_chat/qwen2.5:1.5b
-      api_base: http://localhost:11434
+      model: bedrock/converse/openai.gpt-oss-120b-1:0
+      aws_region_name: os.environ/AWS_REGION_NAME
     model_info:
       supports_function_calling: true
       cleared_for: [sensitive]
@@ -44,3 +45,5 @@ litellm_settings:
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  # Revoking an agent's key takes effect within this many seconds (#148).
+  user_api_key_cache_ttl: 5

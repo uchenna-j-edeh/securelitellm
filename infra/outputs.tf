@@ -1,44 +1,54 @@
 output "proxy_url" {
-  description = "Public URL of the LiteLLM proxy — use as OPENAI_API_BASE in clients"
+  description = "HTTPS endpoint (point proxy_domain_name's DNS at alb_dns_name)"
   value       = "https://${var.proxy_domain_name}"
 }
 
 output "alb_dns_name" {
-  description = "ALB target for the proxy_domain_name DNS record"
+  description = "Create a CNAME (or alias) from proxy_domain_name to this"
   value       = aws_lb.main.dns_name
 }
 
-output "ecr_repository_url" {
-  description = "Full ECR repository URL"
-  value       = aws_ecr_repository.app.repository_url
+output "ecr_proxy_repository" {
+  description = "GitHub secret ECR_REPOSITORY_NAME"
+  value       = aws_ecr_repository.app["proxy"].name
 }
 
-output "ecr_repository_name" {
-  description = "ECR repository name — set as ECR_REPOSITORY_NAME in GitHub Actions secrets"
-  value       = aws_ecr_repository.app.name
+output "ecr_classifier_repository" {
+  description = "GitHub secret ECR_CLASSIFIER_REPOSITORY_NAME"
+  value       = aws_ecr_repository.app["classifier"].name
 }
 
 output "ecs_cluster_name" {
-  description = "ECS cluster name — set as ECS_CLUSTER in GitHub Actions secrets"
+  description = "GitHub secret ECS_CLUSTER"
   value       = aws_ecs_cluster.main.name
 }
 
 output "ecs_service_name" {
-  description = "ECS service name — set as ECS_SERVICE in GitHub Actions secrets"
-  value       = aws_ecs_service.litellm.name
+  description = "GitHub secret ECS_SERVICE"
+  value       = aws_ecs_service.proxy.name
+}
+
+output "db_setup_task_family" {
+  description = "GitHub secret ECS_DB_SETUP_TASK_FAMILY"
+  value       = aws_ecs_task_definition.db_setup.family
 }
 
 output "github_actions_role_arn" {
-  description = "IAM role ARN for GitHub Actions OIDC — set as AWS_ROLE_ARN in GitHub Actions secrets"
-  value       = aws_iam_role.github_actions.arn
+  description = "GitHub secret AWS_ROLE_ARN"
+  value       = var.enable_github_deploy ? aws_iam_role.github_actions[0].arn : null
 }
 
-output "decision_logs_bucket" {
-  description = "S3 bucket for JSONL decision records"
-  value       = aws_s3_bucket.decision_logs.bucket
+output "master_key_secret" {
+  description = "Secrets Manager secret holding the LiteLLM master key (to create agent keys)"
+  value       = aws_secretsmanager_secret.app["master_key"].name
 }
 
 output "cloudwatch_log_group" {
-  description = "CloudWatch log group for container stdout (JSONL decision records)"
-  value       = aws_cloudwatch_log_group.litellm.name
+  description = "Proxy, classifier and db-setup logs, including the decision records"
+  value       = aws_cloudwatch_log_group.proxy.name
+}
+
+output "db_endpoint" {
+  description = "RDS endpoint (reachable only from the proxy tasks)"
+  value       = aws_db_instance.main.address
 }

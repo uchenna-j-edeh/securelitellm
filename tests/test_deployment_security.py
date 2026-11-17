@@ -1,5 +1,6 @@
 """Regression tests for the safe, reproducible local deployment defaults."""
 
+import json
 from pathlib import Path
 
 import yaml
@@ -83,8 +84,13 @@ def test_aws_deploy_requires_explicit_enablement_and_configuration():
         "ECR_REPOSITORY_NAME",
         "ECS_CLUSTER",
         "ECS_SERVICE",
+        "ECR_CLASSIFIER_REPOSITORY_NAME",
+        "ECS_DB_SETUP_TASK_FAMILY",
     ):
         assert required in workflow
+    # The database is prepared, and must succeed, before the service is updated.
+    assert workflow.index("Prepare the database") < workflow.index("Roll the proxy service")
+    assert "BAKE_MODEL=true" in workflow
 
 
 def test_deployments_point_the_router_at_their_litellm_config():
@@ -126,29 +132,127 @@ def test_route_header_is_enabled_only_for_the_demo():
         assert "ROUTER_ROUTE_HEADER=true" in demo[name]["environment"], name
 
 
-def _ollama_container(ecs: str) -> str:
-    start = ecs.index('name       = "ollama"')
-    return ecs[start : ecs.index('name      = "litellm"', start)]
+def _tf(name: str) -> str:
+    return (ROOT / "infra" / name).read_text()
 
 
-def test_production_serves_sensitive_data_from_a_local_sidecar():
-    """#181: the sensitive model group runs inside the ECS task, on its localhost only."""
-    ecs = (ROOT / "infra/ecs.tf").read_text()
-    variables = (ROOT / "infra/variables.tf").read_text()
-    sidecar = _ollama_container(ecs)
-    assert "portMappings" not in sidecar  # not exposed to the load balancer or the VPC
-    assert '{ name = "OLLAMA_HOST", value = "127.0.0.1:11434" }' in sidecar
-    assert "ollama pull ${var.sensitive_model} && wait" in sidecar  # failed pull stops the task
-    assert '{ containerName = "ollama", condition = "HEALTHY" }' in ecs
-    assert 'default     = "ollama/ollama@sha256:' in variables
+def _container(ecs: str, name: str) -> str:
+    """The text of one container definition in infra/ecs.tf."""
+    start = ecs.index(f'name      = "{name}"')
+    end = ecs.find("\n    },\n", start)
+    return ecs[start:end]
 
-    model = variables.split('variable "sensitive_model"')[1].split('default     = "')[1]
-    model = model.split('"')[0]
-    prod = load_yaml("deploy/litellm_config_prod.yaml")["model_list"]
-    sensitive = next(m for m in prod if m["model_name"] == "sensitive")["litellm_params"]
-    assert sensitive == {"model": f"ollama_chat/{model}", "api_base": "http://localhost:11434"}
-    demo_pull = load_yaml("deploy/docker-compose.demo-dual.yml")["services"]["ollama-pull"]
-    assert demo_pull["entrypoint"][-1] == model  # demo and production run the same model
+
+def test_production_serves_every_route_from_bedrock_in_this_account():
+    """Decision 3 (infra/DESIGN.md): no local model; sensitive data goes to Bedrock too."""
+    prod = load_yaml("deploy/litellm_config_prod.yaml")
+    groups = {m["model_name"]: m for m in prod["model_list"]}
+    assert {"llm", "hardened", "quarantine", "sensitive"} <= set(groups)
+    models = {m["litellm_params"]["model"] for m in prod["model_list"]}
+    assert all(model.startswith("bedrock/") for model in models)
+    assert groups["sensitive"]["model_info"]["cleared_for"] == ["sensitive"]
+    assert all("api_key" not in m["litellm_params"] for m in prod["model_list"])  # task role
+    # The task role may invoke exactly the models the config names.
+    variables = _tf("variables.tf")
+    default = variables.split('variable "bedrock_model_ids"')[1].split("default     = ")[1]
+    allowed = set(json.loads(default.split("\n")[0]))
+    assert {model.split("/")[-1] for model in models} == allowed
+    assert "ollama" not in _tf("ecs.tf").lower()
+    assert "GROQ" not in _tf("ecs.tf") + _tf("secrets.tf")
+
+
+def test_production_key_cache_is_short_so_revoking_an_agent_takes_effect_quickly():
+    settings = load_yaml("deploy/litellm_config_prod.yaml")["general_settings"]
+    assert settings["user_api_key_cache_ttl"] <= 10
+
+
+def test_production_task_runs_with_every_safety_switch_on():
+    proxy = _container(_tf("ecs.tf"), "proxy")
+    for setting in (
+        '{ name = "ROUTER_MODE", value = "session" }',
+        '{ name = "ROUTER_LEVEL", value = "L3" }',
+        '{ name = "ROUTER_ENFORCE", value = "true" }',
+        '{ name = "ROUTER_LOCK", value = "true" }',
+        '{ name = "ROUTER_REQUIRE_AGENT_KEY", value = "true" }',
+        '{ name = "CLASSIFIER_BACKEND", value = "local" }',
+        '{ name = "SESSION_STORE", value = "postgres" }',
+    ):
+        assert setting in proxy, setting
+    assert "ROUTER_ROUTE_HEADER" not in proxy
+    assert "SESSION_DB_ALLOW_PLAINTEXT" not in _tf("ecs.tf")
+    assert '{ containerName = "classifier", condition = "HEALTHY" }' in proxy
+    classifier = _container(_tf("ecs.tf"), "classifier")
+    assert "portMappings" not in classifier  # reached on the task's localhost only
+    assert '{ name = "HF_HUB_OFFLINE", value = "1" }' in classifier
+
+
+def test_production_tasks_have_no_path_to_the_internet():
+    """Decision 2: VPC endpoints only. No NAT, no public IP, no default route from private subnets."""
+    infra = "".join(_tf(p.name) for p in (ROOT / "infra").glob("*.tf"))
+    assert "aws_nat_gateway" not in infra
+    assert "assign_public_ip = false" in _tf("ecs.tf")
+    assert "map_public_ip_on_launch = true" not in infra
+    network = _tf("network.tf")
+    private = network.split('resource "aws_route_table" "private"')[1].split("resource ")[0]
+    assert "0.0.0.0/0" not in private and "route {" not in private
+    # The only default route is the public one, used by the load balancer.
+    assert network.count('destination_cidr_block = "0.0.0.0/0"') == 1
+    assert "route_table_id         = aws_route_table.public.id" in network
+    # Task egress goes only to the database, the endpoints and the S3 gateway.
+    egress = [block for block in network.split("resource ") if '"tasks_to_' in block]
+    assert len(egress) == 3
+    assert not any("cidr_ipv4" in block for block in egress)
+    # The S3 gateway endpoint reads ECR image layers and nothing else.
+    endpoints = _tf("endpoints.tf")
+    s3 = endpoints.split('data "aws_iam_policy_document" "s3_endpoint"')[1].split("resource ")[0]
+    assert 'actions   = ["s3:GetObject"]' in s3 and "starport-layer-bucket" in s3
+
+
+def test_production_load_balancer_is_reachable_only_from_chosen_ranges():
+    variables = _tf("variables.tf")
+    allowed = variables.split('variable "allowed_cidrs"')[1].split("\nvariable ")[0]
+    assert "default" not in allowed  # must be chosen; never open by accident
+    alb_rules = [b for b in _tf("network.tf").split("resource ") if '"alb_http' in b]
+    assert alb_rules and all("cidr_ipv4         = each.value" in b for b in alb_rules)
+    alb = _tf("alb.tf")
+    assert "drop_invalid_header_fields = true" in alb
+
+
+def test_production_database_is_private_encrypted_and_tls_only():
+    rds = _tf("rds.tf")
+    for setting in (
+        "publicly_accessible    = false",
+        "storage_encrypted     = true",
+        "manage_master_user_password = true",
+        'name  = "rds.force_ssl"',
+        "deletion_protection        = var.db_deletion_protection",
+    ):
+        assert setting in rds, setting
+    secrets = _tf("secrets.tf")
+    assert "sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem" in secrets
+    dockerfile = (ROOT / "deploy/Dockerfile").read_text()
+    assert "/etc/ssl/rds/global-bundle.pem" in dockerfile and "--checksum=sha256:" in dockerfile
+    # Only the db-setup task can read the RDS admin password.
+    iam = _tf("iam.tf")
+    assert iam.count("master_user_secret[0].secret_arn") == 1
+    assert (
+        "master_user_secret" in iam.split('"db_setup_execution_secrets"')[1].split("resource ")[0]
+    )
+
+
+def test_db_setup_task_runs_the_script_the_image_ships():
+    dockerfile = (ROOT / "deploy/Dockerfile").read_text()
+    assert "COPY deploy/db_setup.py /workspace/deploy/db_setup.py" in dockerfile
+    assert 'entryPoint = ["/app/.venv/bin/python", "/workspace/deploy/db_setup.py"]' in _tf(
+        "ecs.tf"
+    )
+
+
+def test_production_image_builds_without_pip():
+    """The pinned LiteLLM base image has no pip; installing broke the production build."""
+    dockerfile = (ROOT / "deploy/Dockerfile").read_text()
+    assert "pip install" not in dockerfile
+    assert "/app/.venv/bin/python -c" in dockerfile
 
 
 def test_demo_proxies_require_agent_keys_and_share_a_private_key_database():

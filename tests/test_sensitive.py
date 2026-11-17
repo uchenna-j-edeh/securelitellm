@@ -237,11 +237,13 @@ _ROOT = Path(__file__).parent.parent
         ("deploy/litellm_config.yaml", "openai/mock"),
         ("deploy/litellm_config.local.yaml", "openai/mock"),
         ("deploy/litellm_config.demo.yaml", "ollama_chat/"),
-        ("deploy/litellm_config_prod.yaml", "ollama_chat/"),
+        ("deploy/litellm_config_prod.yaml", "bedrock/"),
     ],
 )
-def test_sensitive_group_is_local_outside_the_eval(config, prefix):
-    """Production and the demo never send sensitive requests to a hosted provider."""
+def test_sensitive_group_is_cleared_and_kept_out_of_third_parties(config, prefix):
+    """The demo keeps sensitive requests on its local model. Production sends them
+    to Bedrock in the deployment's own AWS account (infra/DESIGN.md, decision 3,
+    2026-11-16), never to a third-party provider."""
     entries = yaml.safe_load((_ROOT / config).read_text())["model_list"]
     sensitive = [e for e in entries if e["model_name"] == "sensitive"]
     assert sensitive, config
@@ -250,10 +252,13 @@ def test_sensitive_group_is_local_outside_the_eval(config, prefix):
         assert entry["model_info"]["cleared_for"] == ["sensitive"], config
 
 
-def test_production_sensitive_group_uses_the_task_sidecar():
+def test_production_sensitive_group_uses_the_accounts_own_bedrock():
+    """No API key and no custom endpoint: the ECS task role, through the VPC endpoint."""
     entries = yaml.safe_load((_ROOT / "deploy/litellm_config_prod.yaml").read_text())
     sensitive = next(e for e in entries["model_list"] if e["model_name"] == "sensitive")
-    assert sensitive["litellm_params"]["api_base"] == "http://localhost:11434"
+    params = sensitive["litellm_params"]
+    assert params["model"].startswith("bedrock/")
+    assert "api_key" not in params and "api_base" not in params
 
 
 # ---------------------------------------------------------------------------

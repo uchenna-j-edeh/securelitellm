@@ -1,5 +1,4 @@
-# Copy to terraform.tfvars (never commit terraform.tfvars — it may contain
-# sensitive overrides). Adjust values for your deployment target.
+# Copy to terraform.tfvars (git-ignored). See DESIGN.md for what each choice means.
 
 aws_region   = "us-east-1"
 project_name = "securelitellm"
@@ -11,13 +10,11 @@ github_repo = "uchenna-j-edeh/securelitellm"
 acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/replace-me"
 proxy_domain_name   = "securelitellm.example.com"
 
-task_cpu    = 2048 # litellm + Ollama sidecar for sensitive data (#181)
-task_memory = 4096
+# Required, no default: who may reach the load balancer. Use your campus or
+# home network ranges. ["0.0.0.0/0"] opens it to everyone (agent keys are
+# still required for every request).
+allowed_cidrs = ["203.0.113.0/24"]
 
-# Secure defaults. Set router_enforce to "false" only for audit-only experiments.
-router_mode    = "session"
-router_level   = "L3"
-router_enforce = "true"
-
-classifier_backend    = "promptguard"
-promptguard_threshold = "0.5"
+# Optional
+# alarm_email   = "you@example.com"
+# desired_count = 2   # a second task in the same AZ removes the restart gap

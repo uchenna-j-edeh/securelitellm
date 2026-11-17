@@ -1,6 +1,10 @@
 .terraform/
 .terraform.lock.hcl
 terraform.tfstate
-terraform.tfstate.backup
+terraform.tfstate.*
+errored.tfstate
 terraform.tfvars
+backend.hcl
 *.tfplan
+# dry-run state, certificate and keys (scripts/aws_dryrun.sh)
+.dryrun/
