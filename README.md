@@ -456,7 +456,8 @@ Each LiteLLM config defines the `hardened`, `quarantine` and `sensitive` groups:
 | `litellm_config.yaml` | default stack, eval, CI | mock | mock | mock |
 | `litellm_config.local.yaml` | local dev without Docker | mock | mock | mock |
 | `litellm_config.demo.yaml` | `make demo-dual-up` | mock | local Ollama `qwen2.5:1.5b` | local Ollama `qwen2.5:1.5b` |
-| `litellm_config_prod.yaml` | production image | Groq | Groq (until a self-hosted model exists) | Ollama sidecar in the ECS task |
+| `litellm_config.bedrock.yaml` | `BEDROCK=1 make demo-dual-up` | Bedrock | Bedrock | Bedrock |
+| `litellm_config_prod.yaml` | production image (`infra/`) | Bedrock | Bedrock | Bedrock (in the deployment's AWS account) |
 
 In the demo, quarantined requests are answered by the local model, so their context
 (often a prompt injection plus the data it targets) never leaves the machine. Ollama is
@@ -505,9 +506,13 @@ A regex detector (`router/sensitive.py`) scans user messages and tool results. T
   only on deployments allowed to see secrets and personal data, such as a self-hosted
   model.
 
-In production the `sensitive` group is an Ollama sidecar in the same ECS task
-(`infra/ecs.tf`), reachable only on the task's localhost; see
-[`infra/README.md`](infra/README.md).
+In production every group, `sensitive` included, is served by Amazon Bedrock
+in the deployment's own AWS account, reached through a VPC endpoint (decision
+3 in [`infra/DESIGN.md`](infra/DESIGN.md)). Bedrock does not store prompts or
+use them for training, and the data stays in the account's region, but it
+does leave the proxy's task. To keep sensitive data inside the task, point the
+`sensitive` group at a self-hosted model instead. The demo still serves it
+from a local Ollama model.
 
 ### Tool-call decisions
 

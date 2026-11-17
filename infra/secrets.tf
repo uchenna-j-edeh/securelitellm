@@ -1,103 +1,73 @@
-# ---------------------------------------------------------------------------
-# Secrets Manager — create empty placeholders.
-# Populate values out-of-band before the first deploy:
+# Secrets the proxy reads at start (ECS injects them as environment variables).
 #
-#   aws secretsmanager put-secret-value \
-#     --secret-id securelitellm-dev/litellm-master-key \
-#     --secret-string 'sk-your-key-here'
-#
-#   aws secretsmanager put-secret-value \
-#     --secret-id securelitellm-dev/groq-api-key \
-#     --secret-string 'gsk_your-key-here'
-# ---------------------------------------------------------------------------
+# The values are generated here, so they are also in the Terraform state. The
+# state bucket (bootstrap/) is encrypted, versioned and private; treat access
+# to it as access to these secrets.
 
-resource "aws_secretsmanager_secret" "litellm_master_key" {
-  name                    = "${local.name}/litellm-master-key"
-  description             = "LiteLLM proxy master key"
-  recovery_window_in_days = 0  # instant delete; fine for dev
+resource "random_password" "master_key" {
+  length  = 48
+  special = false
 }
 
-resource "aws_secretsmanager_secret" "groq_api_key" {
-  name                    = "${local.name}/groq-api-key"
-  description             = "Groq API key for the LLM backend"
-  recovery_window_in_days = 0
+resource "random_password" "salt_key" {
+  length  = 48
+  special = false
 }
 
-# ---------------------------------------------------------------------------
-# GitHub Actions OIDC — lets Actions assume an IAM role without long-lived keys
-# ---------------------------------------------------------------------------
-
-data "aws_iam_openid_connect_provider" "github" {
-  # Use the account's existing OIDC provider if one was already registered;
-  # create it once manually or via the bootstrap script if not:
-  #   aws iam create-open-id-connect-provider \
-  #     --url https://token.actions.githubusercontent.com \
-  #     --client-id-list sts.amazonaws.com \
-  #     --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
-  url = "https://token.actions.githubusercontent.com"
+resource "random_password" "session_hmac_key" {
+  length  = 64
+  special = false
 }
 
-data "aws_iam_policy_document" "github_actions_assume" {
-  statement {
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-    principals {
-      type        = "Federated"
-      identifiers = [data.aws_iam_openid_connect_provider.github.arn]
-    }
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:aud"
-      values   = ["sts.amazonaws.com"]
-    }
-    condition {
-      test     = "StringLike"
-      variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:*"]
-    }
+resource "random_password" "litellm_db" {
+  length  = 40
+  special = false # used inside connection URLs
+}
+
+resource "random_password" "session_db_proxy" {
+  length  = 40
+  special = false
+}
+
+locals {
+  db_host = aws_db_instance.main.address
+  db_port = aws_db_instance.main.port
+  secrets = {
+    # Admin key for LiteLLM's key management. Can't send model requests
+    # (ROUTER_REQUIRE_AGENT_KEY=true).
+    master_key = "sk-${random_password.master_key.result}"
+    # Encrypts credentials LiteLLM stores in its database. Never change it
+    # once keys exist.
+    salt_key                  = random_password.salt_key.result
+    session_hmac_key          = random_password.session_hmac_key.result
+    litellm_db_password       = random_password.litellm_db.result
+    session_db_proxy_password = random_password.session_db_proxy.result
+    # LiteLLM connects through Prisma, which takes sslmode=require (TLS,
+    # without checking the server's certificate). rds.force_ssl refuses
+    # anything unencrypted either way.
+    database_url = "postgresql://litellm:${random_password.litellm_db.result}@${local.db_host}:${local.db_port}/litellm?sslmode=require"
+    # The router's own connection verifies the server against the RDS CA
+    # bundle baked into the image (deploy/Dockerfile).
+    session_db_url = "postgresql://securelitellm_proxy:${random_password.session_db_proxy.result}@${local.db_host}:${local.db_port}/sessions?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem"
   }
 }
 
-resource "aws_iam_role" "github_actions" {
-  name               = "${local.name}-github-actions"
-  assume_role_policy = data.aws_iam_policy_document.github_actions_assume.json
+locals {
+  # for_each needs keys Terraform doesn't treat as sensitive.
+  secret_names = toset([
+    "master_key", "salt_key", "session_hmac_key", "litellm_db_password",
+    "session_db_proxy_password", "database_url", "session_db_url",
+  ])
 }
 
-data "aws_caller_identity" "current" {}
-
-data "aws_iam_policy_document" "github_actions_deploy" {
-  # ECR: push images
-  statement {
-    actions = [
-      "ecr:GetAuthorizationToken",
-      "ecr:BatchCheckLayerAvailability",
-      "ecr:GetDownloadUrlForLayer",
-      "ecr:BatchGetImage",
-      "ecr:PutImage",
-      "ecr:InitiateLayerUpload",
-      "ecr:UploadLayerPart",
-      "ecr:CompleteLayerUpload",
-    ]
-    resources = ["*"]
-  }
-
-  # ECS: force a new deployment
-  statement {
-    actions   = ["ecs:UpdateService", "ecs:DescribeServices"]
-    resources = ["arn:aws:ecs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:service/${local.name}/${local.name}"]
-  }
-
-  # IAM: pass the task roles to ECS (required by update-service)
-  statement {
-    actions   = ["iam:PassRole"]
-    resources = [
-      aws_iam_role.ecs_execution.arn,
-      aws_iam_role.ecs_task.arn,
-    ]
-  }
+resource "aws_secretsmanager_secret" "app" {
+  for_each                = local.secret_names
+  name                    = "${local.name}/${replace(each.key, "_", "-")}"
+  recovery_window_in_days = var.ephemeral ? 0 : 7
 }
 
-resource "aws_iam_role_policy" "github_actions_deploy" {
-  name   = "deploy"
-  role   = aws_iam_role.github_actions.id
-  policy = data.aws_iam_policy_document.github_actions_deploy.json
+resource "aws_secretsmanager_secret_version" "app" {
+  for_each      = local.secret_names
+  secret_id     = aws_secretsmanager_secret.app[each.key].id
+  secret_string = local.secrets[each.key]
 }
