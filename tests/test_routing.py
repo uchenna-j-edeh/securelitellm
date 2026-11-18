@@ -794,3 +794,120 @@ async def test_live_router_with_the_group_routes_normally(monkeypatch, log_path)
     _fake_proxy(monkeypatch, ["mock", "hardened"])
     result = await hook.async_pre_call_hook(MagicMock(), MagicMock(), _data(), "completion")
     assert result["model"] == "hardened"
+
+
+# --- Replies on routes that strip tools (2026-11-18 AWS demo) -------------------
+# Seen on Bedrock after a GitHub injection was quarantined: LiteLLM sends earlier
+# tool use as "[tool call <id>: name(args)]" text and the model copied it.
+_IMITATED_REPLY = (
+    '[tool call tooluse_getissue_x: get_github_issue({"owner":"demo","repo":"demo-repo",'
+    '"issue_number":2})]<reasoning>We need proper repo name. The configured demo repo '
+    'not specified; assume "demo". Let\'s try.</reasoning>[tool call tooluse_getissue_2: '
+    'get_github_issue({"owner":"demo","repo":"demo","issue_number":2})]<reasoning>We '
+    "await result.</reasoning>I’m unable to retrieve the full details of issue #2 from "
+    "the demo repository."
+)
+
+
+def _text_response(content):
+    message = SimpleNamespace(content=content, tool_calls=None)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
+
+
+def test_tidy_removes_imitated_tool_calls_and_reasoning():
+    from router.hook import tidy_tool_free_text
+
+    assert tidy_tool_free_text(_IMITATED_REPLY) == (
+        "I’m unable to retrieve the full details of issue #2 from the demo repository."
+    )
+
+
+def test_tidy_keeps_ordinary_text_and_brackets():
+    from router.hook import tidy_tool_free_text
+
+    text = "See [1] and [tool] notes.\n\nRevenue was $4.2M (Q3)."
+    assert tidy_tool_free_text(text) == text
+
+
+def test_tidy_removes_imitated_tool_results_and_thinking():
+    from router.hook import tidy_tool_free_text
+
+    text = '[tool result for call_1: {"status": 200}]\n<thinking>hmm</thinking>\nDone.'
+    assert tidy_tool_free_text(text) == "Done."
+
+
+def test_tidy_keeps_sentences_around_a_removed_note_apart():
+    from router.hook import tidy_tool_free_text
+
+    text = 'Not possible.[tool call t2: comment_github_issue({"number": 2})]I can explain why.'
+    assert tidy_tool_free_text(text) == "Not possible.\nI can explain why."
+
+
+def test_tidy_falls_back_when_nothing_is_left():
+    from router.hook import TOOLS_REMOVED_FALLBACK, tidy_tool_free_text
+
+    assert tidy_tool_free_text("[tool call x: f({})]<reasoning>r</reasoning>") == (
+        TOOLS_REMOVED_FALLBACK
+    )
+
+
+@pytest.mark.asyncio
+async def test_stripped_route_tells_the_model_its_tools_are_gone(monkeypatch, log_path):
+    from router.hook import TOOLS_REMOVED_NOTICE
+
+    hook = _make_hook(monkeypatch, log_path)
+    _force_level(hook, monkeypatch, "high")
+    result = await hook.async_pre_call_hook(MagicMock(), MagicMock(), _data(), "completion")
+    assert "tools" not in result
+    roles = [m["role"] for m in result["messages"]]
+    assert roles == ["system", "system", "user"]  # route prompt, notice, conversation
+    assert result["messages"][1]["content"] == TOOLS_REMOVED_NOTICE
+    assert result["messages"][2] == {"role": "user", "content": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_route_with_tools_gets_no_notice(monkeypatch, log_path):
+    from router.hook import TOOLS_REMOVED_NOTICE
+
+    hook = _make_hook(monkeypatch, log_path)
+    _force_level(hook, monkeypatch, "elevated")
+    result = await hook.async_pre_call_hook(MagicMock(), MagicMock(), _data(), "completion")
+    assert "tools" in result
+    assert all(m.get("content") != TOOLS_REMOVED_NOTICE for m in result["messages"])
+
+
+@pytest.mark.asyncio
+async def test_post_call_tidies_a_reply_on_a_stripped_route(monkeypatch, log_path):
+    hook = _make_hook(monkeypatch, log_path)
+    _force_level(hook, monkeypatch, "high")
+    data = _data()
+    data = await hook.async_pre_call_hook(MagicMock(), MagicMock(), data, "completion")
+    response = _text_response(_IMITATED_REPLY)
+
+    tidied = await hook.async_post_call_success_hook(MagicMock(), data, response)
+
+    assert tidied.choices[0].message.content.startswith("I’m unable to retrieve")
+    assert "[tool call" not in tidied.choices[0].message.content
+    assert response.choices[0].message.content == _IMITATED_REPLY  # original untouched
+
+
+@pytest.mark.asyncio
+async def test_post_call_leaves_a_clean_stripped_reply_alone(monkeypatch, log_path):
+    hook = _make_hook(monkeypatch, log_path)
+    _force_level(hook, monkeypatch, "high")
+    data = await hook.async_pre_call_hook(MagicMock(), MagicMock(), _data(), "completion")
+    result = await hook.async_post_call_success_hook(
+        MagicMock(), data, _text_response("Here is a summary.")
+    )
+    assert result is None  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_post_call_does_not_rewrite_replies_on_routes_with_tools(monkeypatch, log_path):
+    hook = _make_hook(monkeypatch, log_path)
+    _force_level(hook, monkeypatch, "low")
+    data = await hook.async_pre_call_hook(MagicMock(), MagicMock(), _data(), "completion")
+    result = await hook.async_post_call_success_hook(
+        MagicMock(), data, _text_response(_IMITATED_REPLY)
+    )
+    assert result is None
