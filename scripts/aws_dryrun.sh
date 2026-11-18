@@ -230,7 +230,8 @@ EOF
 #   - an approver key for demo-<name>-approver, a proxy_admin user, used only
 #     by the UI's approve/deny buttons (an admin's key can't send model calls)
 # Their env file carries no Jira, Gmail or SMTP secrets: email stays in log
-# mode and only the public GitHub beats are offered besides the core beats.
+# mode. The Jira site, project and issue keys are included; each participant
+# adds their own JIRA_EMAIL and JIRA_API_TOKEN to get the Jira beats.
 cmd_participant() {
   preflight
   local name="${1:-}"
@@ -280,6 +281,15 @@ DEMO_EMAIL_ALLOWLIST=${DEMO_EMAIL_ALLOWLIST:-${DEMO_RECIPIENT:-demo-recipient@ex
 GITHUB_ISSUES_REPO=${GITHUB_ISSUES_REPO:-}
 GITHUB_ISSUES_CONTROL_NUMBER=${GITHUB_ISSUES_CONTROL_NUMBER:-}
 GITHUB_ISSUES_ATTACK_NUMBER=${GITHUB_ISSUES_ATTACK_NUMBER:-}
+# Jira: shared settings (no access on their own). For the Jira beats, fill in
+# your own Atlassian email and API token below and restart the launcher.
+JIRA_BASE_URL=${JIRA_BASE_URL:-}
+JIRA_PROJECT_KEY=${JIRA_PROJECT_KEY:-}
+JIRA_CLOUD_ID=${JIRA_CLOUD_ID:-}
+JIRA_CONTROL_ISSUE=${JIRA_CONTROL_ISSUE:-}
+JIRA_ATTACK_ISSUE=${JIRA_ATTACK_ISSUE:-}
+JIRA_EMAIL=
+JIRA_API_TOKEN=
 EOF
   )
   (cd "$STATE/participants" && rm -f "$name.zip" && zip -qr "$name.zip" "$name")
