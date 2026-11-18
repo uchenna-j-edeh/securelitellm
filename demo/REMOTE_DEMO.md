@@ -73,8 +73,13 @@ Then open <http://localhost:8003>. Ctrl-C stops it.
   Your approver key can decide it.
 - The decision panel stays empty: decisions are read from CloudWatch by the
   presenter. Each one is tagged with your agent name, `demo-<your-name>`.
-- Gmail and Jira beats show as not configured; GitHub beats read a public
-  demo repository.
+- GitHub beats read a public demo repository. Gmail beats show as not
+  configured (they need the presenter's mailbox).
+- **Jira beats:** open `securelitellm-demo.env`, fill in your own
+  `JIRA_EMAIL=` (your Atlassian login) and `JIRA_API_TOKEN=` (from
+  <https://id.atlassian.com/manage-profile/security/api-tokens>), and restart
+  the launcher. The site, project and issue keys are already in the file.
+  Without them the Jira beats stay hidden.
 
 ### If something goes wrong
 
