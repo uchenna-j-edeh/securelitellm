@@ -27,6 +27,7 @@ are rejected. Logs carry session_ref (a hash prefix), never the raw id.
 import asyncio
 import copy
 import os
+import re
 import sys
 import time
 import uuid
@@ -212,6 +213,58 @@ def _pre_call_class(data: dict) -> DataClass | None:
 def _with_prompt(messages: list[dict], prompt: str) -> list[dict]:
     """Send the route's safety prompt as a system message ahead of the conversation."""
     return [{"role": "system", "content": prompt}, *messages]
+
+
+# A route that strips tools still forwards the conversation's earlier tool calls
+# and results. Providers that need tool definitions to accept tool history
+# (Bedrock) get it from LiteLLM as text, "[tool call <id>: name(args)]" and
+# "[tool result for <id>: ...]", and the model then imitated that text in its
+# reply: fake tool calls and its <reasoning> in the answer (found in the AWS
+# demo, 2026-11-18). Nothing ran (the client executes only structured calls),
+# but the reply looked broken. The notice asks for prose; the post-call hook
+# removes what slips through.
+TOOLS_REMOVED_NOTICE = (
+    "Gateway notice: your tools have been removed for this reply. Earlier tool use "
+    "may appear in the conversation as bracketed notes such as [tool call ...] or "
+    "[tool result ...]; they are records, not a format to copy. Do not write tool "
+    "calls, function-call syntax or bracketed notes, and do not show your reasoning. "
+    "You cannot take any action in this reply, so do not say that you did. Answer the "
+    "user in plain prose."
+)
+TOOLS_REMOVED_FALLBACK = (
+    "SecureLiteLLM removed tool access for this reply because the conversation was "
+    "flagged as high risk, so the request could not be completed."
+)
+_REASONING_BLOCK = re.compile(r"<(reasoning|thinking)>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_REASONING_TAG = re.compile(r"</?(?:reasoning|thinking)>", re.IGNORECASE)
+_TOOL_NOTE = re.compile(r"\[tool call\b[^\n]*?\)\]|\[tool result for\b[^\n]*\]", re.IGNORECASE)
+
+
+def tidy_tool_free_text(text: str) -> str:
+    """A reply written without tools, minus imitated tool notes and reasoning."""
+    # Removed text becomes a line break so the sentences around it stay apart.
+    cleaned = _REASONING_BLOCK.sub("\n", text)
+    cleaned = _REASONING_TAG.sub("\n", cleaned)
+    cleaned = _TOOL_NOTE.sub("\n", cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned or TOOLS_REMOVED_FALLBACK
+
+
+def _tidied_response(response: Any) -> Any | None:
+    """A copy with each choice's text tidied, or None if nothing changed."""
+    changed = False
+    tidied = copy.deepcopy(response)
+    for choice in getattr(tidied, "choices", None) or []:
+        message = getattr(choice, "message", None)
+        content = getattr(message, "content", None)
+        if not isinstance(content, str):
+            continue
+        clean = tidy_tool_free_text(content)
+        if clean != content:
+            message.content = clean
+            changed = True
+    return tidied if changed else None
 
 
 def _is_session_start(messages: list[dict]) -> bool:
@@ -769,6 +822,8 @@ class RouterHook(CustomLogger):
             # Explicitly forbid tool use so the model produces a text response
             # instead of generating a tool call that the API will reject.
             data["tool_choice"] = "none"
+            messages = _with_prompt(messages, TOOLS_REMOVED_NOTICE)
+            data["messages"] = messages
 
         prompt = self._routing.prompt_text(route)
         if prompt is not None:
@@ -793,6 +848,12 @@ class RouterHook(CustomLogger):
         except SessionStoreUnavailable as exc:
             # The response is not released: its tool calls were never checked.
             raise self._store_outage(exc, "post_call", data, user_api_key_dict) from exc
+
+    def _pre_call_stripped_tools(self, data: dict) -> bool:
+        """Whether the pre-call route removed this request's tools."""
+        stamp = _route_stamp(data)
+        route = self._routing.routes.get(stamp.get("route", "")) if stamp else None
+        return route is not None and route.strips_tools
 
     async def _post_call(
         self,
@@ -832,6 +893,8 @@ class RouterHook(CustomLogger):
             response, include_reads=True, inventory=self._inventory
         )
         if not generated_calls:
+            if self.config.enforce and self._pre_call_stripped_tools(data):
+                return _tidied_response(response)
             return None
         egress_sinks = [
             c
