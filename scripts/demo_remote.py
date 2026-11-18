@@ -51,6 +51,21 @@ def wait_for_port(port: int, process: subprocess.Popen, seconds: float = 30) -> 
     raise SystemExit(f"the tool server did not open port {port}")
 
 
+def trust_bundle(cert: Path, dest: Path) -> Path:
+    """Write the public CAs plus the demo certificate to *dest*.
+
+    SSL_CERT_FILE replaces the trust store. Pointed at the demo certificate
+    alone, every real https site the tools fetch fails verification; the model
+    then retried over plain http, a URL the user didn't type, and the proxy held
+    it for approval (found in the 2026-11-18 demo). Trusting both keeps the
+    proxy verified and the tools working.
+    """
+    import certifi
+
+    dest.write_bytes(Path(certifi.where()).read_bytes().rstrip(b"\n") + b"\n" + cert.read_bytes())
+    return dest
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__, file=sys.stderr)
@@ -67,7 +82,7 @@ def main() -> int:
         cert = env_file.parent / cert
     if not cert.is_file():
         raise SystemExit(f"certificate {cert} not found; keep cert.pem next to the env file")
-    values["SSL_CERT_FILE"] = str(cert)
+    values["SSL_CERT_FILE"] = str(trust_bundle(cert, env_file.parent / ".ca-bundle.pem"))
 
     # Stop both servers on SIGTERM as on Ctrl-C (and when SIGINT is ignored,
     # as in a background job).
