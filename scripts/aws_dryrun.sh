@@ -5,6 +5,9 @@
 #   DRYRUN_AWS_PROFILE=<admin profile> scripts/aws_dryrun.sh up       # infra
 #   DRYRUN_AWS_PROFILE=<admin profile> scripts/aws_dryrun.sh release  # images, db-setup, service
 #   DRYRUN_AWS_PROFILE=<admin profile> scripts/aws_dryrun.sh agent    # agent key + demo env
+#   DRYRUN_AWS_PROFILE=<admin profile> scripts/aws_dryrun.sh allow <ip>...        # admit more IPs
+#   DRYRUN_AWS_PROFILE=<admin profile> scripts/aws_dryrun.sh participant <name>   # keys + env for a laptop
+#   DRYRUN_AWS_PROFILE=<admin profile> scripts/aws_dryrun.sh watch    # decisions from CloudWatch
 #   DRYRUN_AWS_PROFILE=<admin profile> scripts/aws_dryrun.sh down     # destroy everything
 #
 # Differences from a real deployment, all on purpose:
@@ -69,21 +72,51 @@ EOF
   fi
   echo "certificate: $(cat "$STATE/cert_arn" | sed 's/[0-9]\{12\}/<account>/')"
 
-  local cidr="${DRYRUN_ALLOWED_CIDR:-$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')/32}"
-  echo "load balancer admits: $cidr"
+  write_tfvars
+  log "infrastructure (infra/)"
+  tf init -input=false -reconfigure -backend-config="$STATE/backend.hcl" >/dev/null
+  tf apply -auto-approve -input=false -var-file="$STATE/dryrun.tfvars"
+}
+
+# The load balancer admits this machine's current public IP (or
+# DRYRUN_ALLOWED_CIDR) plus every CIDR added with `allow`, kept in
+# infra/.dryrun/allowed_cidrs, one per line.
+write_tfvars() {
+  local own cidrs list
+  own="${DRYRUN_ALLOWED_CIDR:-$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')/32}"
+  touch "$STATE/allowed_cidrs"
+  cidrs=$( { echo "$own"; cat "$STATE/allowed_cidrs"; } | sed '/^$/d' | sort -u)
+  echo "load balancer admits:"; echo "$cidrs" | sed 's/^/  /'
+  list=$(echo "$cidrs" | sed 's/.*/"&"/' | paste -sd, -)
   cat > "$STATE/dryrun.tfvars" <<EOF
 aws_region             = "$REGION"
 environment            = "dryrun"
 acm_certificate_arn    = "$(cat "$STATE/cert_arn")"
 proxy_domain_name      = "securelitellm-dryrun.invalid"
-allowed_cidrs          = ["$cidr"]
+allowed_cidrs          = [$list]
 enable_github_deploy   = false
 policy_file            = "policy.demo.yaml"
 db_deletion_protection = false
 ephemeral              = true
 EOF
+}
 
-  log "infrastructure (infra/)"
+cmd_allow() {  # allow <ip or cidr>... : add to the allow-list and apply
+  preflight
+  [ -s "$STATE/backend.hcl" ] || { echo "run 'up' first" >&2; exit 1; }
+  [ $# -gt 0 ] || { echo "usage: $0 allow <ip or cidr>..." >&2; exit 2; }
+  local entry cidrs=""
+  for entry in "$@"; do
+    # Normalised by Python: a bare IP becomes /32; anything else is refused,
+    # and nothing is added unless every entry is valid.
+    if ! cidrs+=$("$PYTHON" -c 'import ipaddress, sys; print(ipaddress.IPv4Network(sys.argv[1]))' \
+        "$entry" 2>/dev/null)$'\n'; then
+      echo "not an IPv4 address or CIDR: $entry" >&2; exit 2
+    fi
+  done
+  printf '%s' "$cidrs" >> "$STATE/allowed_cidrs"
+  write_tfvars
+  log "update the load balancer allow-list"
   tf init -input=false -reconfigure -backend-config="$STATE/backend.hcl" >/dev/null
   tf apply -auto-approve -input=false -var-file="$STATE/dryrun.tfvars"
 }
@@ -191,6 +224,91 @@ EOF
   echo "  set -a; . deploy/.env; . infra/.dryrun/demo.env; set +a; .venv/bin/python demo/server.py"
 }
 
+# A participant runs the UI on their own laptop (scripts/demo_remote.py). They
+# get two keys, never the master key:
+#   - an agent key for demo-<name> (model requests; the identity in CloudWatch)
+#   - an approver key for demo-<name>-approver, a proxy_admin user, used only
+#     by the UI's approve/deny buttons (an admin's key can't send model calls)
+# Their env file carries no Jira, Gmail or SMTP secrets: email stays in log
+# mode and only the public GitHub beats are offered besides the core beats.
+cmd_participant() {
+  preflight
+  local name="${1:-}"
+  if ! [[ "$name" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]]; then
+    echo "usage: $0 participant <name>  (lowercase letters, digits, dashes)" >&2; exit 2
+  fi
+  local url master agent approver agent_key approver_key dir
+  url="https://$(out alb_dns_name)"
+  master=$(aws secretsmanager get-secret-value --secret-id "$(out master_key_secret)" \
+    --query SecretString --output text)
+  agent="demo-$name"; approver="demo-$name-approver"
+  api() {  # path, json -> response body (fails on HTTP errors)
+    curl -fsS --cacert "$STATE/cert.pem" "$url$1" -H "Authorization: Bearer $master" \
+      -H 'Content-Type: application/json' -d "$2"
+  }
+  log "LiteLLM users and keys for $name"
+  # /user/new fails if the user exists (a re-run); the new key is what matters.
+  api /user/new "{\"user_id\": \"$agent\"}" >/dev/null 2>&1 || true
+  api /user/new "{\"user_id\": \"$approver\", \"user_role\": \"proxy_admin\"}" >/dev/null 2>&1 || true
+  agent_key=$(api /key/generate "{\"user_id\": \"$agent\", \"models\": [\"llm\"], \"key_alias\": \"$agent\"}" | jq -r .key)
+  approver_key=$(api /key/generate "{\"user_id\": \"$approver\", \"key_alias\": \"$approver\"}" | jq -r .key)
+  [ -n "$agent_key" ] && [ "$agent_key" != null ] && [ -n "$approver_key" ] && [ "$approver_key" != null ] \
+    || { echo "key generation failed" >&2; exit 1; }
+
+  dir="$STATE/participants/$name"
+  mkdir -p "$dir"
+  cp "$STATE/cert.pem" "$dir/cert.pem"
+  (
+    umask 077
+    set -a; . "$ROOT/deploy/.env"; set +a
+    cat > "$dir/securelitellm-demo.env" <<EOF
+# SecureLiteLLM demo for $name. Run: uv run python scripts/demo_remote.py <this file>
+# Keep it private: it holds your agent and approver keys. Valid until the
+# deployment is torn down.
+PROXY_URL_SESSION=$url
+PROXY_URL_STATELESS=http://127.0.0.1:9
+CONTAINER_SESSION=no-local-container
+DEMO_MODEL=llm
+DEMO_AGENT_ID=$agent
+DEMO_AGENT_KEY=$agent_key
+DEMO_APPROVER_KEY=$approver_key
+SSL_CERT_FILE=cert.pem
+DEMO_PORT=8003
+DEMO_EMAIL_MODE=log
+DEMO_RECIPIENT=${DEMO_RECIPIENT:-demo-recipient@example.test}
+DEMO_EMAIL_ALLOWLIST=${DEMO_EMAIL_ALLOWLIST:-${DEMO_RECIPIENT:-demo-recipient@example.test}}
+GITHUB_ISSUES_REPO=${GITHUB_ISSUES_REPO:-}
+GITHUB_ISSUES_CONTROL_NUMBER=${GITHUB_ISSUES_CONTROL_NUMBER:-}
+GITHUB_ISSUES_ATTACK_NUMBER=${GITHUB_ISSUES_ATTACK_NUMBER:-}
+EOF
+  )
+  (cd "$STATE/participants" && rm -f "$name.zip" && zip -qr "$name.zip" "$name")
+  echo "send $STATE/participants/$name.zip to $name privately"
+  echo "(agent $agent; decisions show \"agent\": \"$agent\" in CloudWatch)"
+}
+
+# Stream decision records from CloudWatch, one line each:
+#   time  agent  phase  action  risk  rules
+cmd_watch() {
+  preflight
+  local group
+  group=$(out cloudwatch_log_group)
+  echo "following $group (Ctrl-C to stop)"
+  aws logs tail "$group" --follow --format short --since "${DRYRUN_WATCH_SINCE:-5m}" \
+    --log-stream-name-prefix proxy | format_decisions
+}
+
+format_decisions() {  # "<timestamp> <json>" lines -> decision summary lines
+  local line
+  while IFS= read -r line; do
+    case "$line" in *'"action"'*) ;; *) continue ;; esac
+    printf '%s\n' "${line#* }" | jq -r --arg t "${line%% *}" \
+      'select(.phase and .action) | [($t | .[11:19]), (.agent // "-"), .phase, .action,
+        (.risk_score // "" | tostring), ((.matched_rules // []) | map(tostring) | join(","))] | @tsv' \
+      2>/dev/null || true
+  done
+}
+
 cmd_down() {
   preflight
   if [ -s "$STATE/backend.hcl" ]; then
@@ -239,6 +357,9 @@ case "${1:-}" in
   up) cmd_up ;;
   release) cmd_release ;;
   agent) cmd_agent ;;
+  allow) shift; cmd_allow "$@" ;;
+  participant) shift; cmd_participant "$@" ;;
+  watch) cmd_watch ;;
   down) cmd_down ;;
-  *) echo "usage: DRYRUN_AWS_PROFILE=<profile> $0 up|release|agent|down" >&2; exit 2 ;;
+  *) echo "usage: DRYRUN_AWS_PROFILE=<profile> $0 up|release|agent|allow <ip>...|participant <name>|watch|down" >&2; exit 2 ;;
 esac

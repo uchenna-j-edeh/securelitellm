@@ -160,6 +160,11 @@ The load balancer admits only this machine's public IP at the time of `up`
 session mode exists in AWS, and the UI's decision panel stays empty: read the
 decisions in CloudWatch Logs Insights (log group `/ecs/securelitellm-dryrun`).
 
+For several people each running the UI on their own laptop, `allow` adds
+their IPs, `participant <name>` makes each one's keys and env file, and
+`watch` streams everyone's decisions: see
+[demo/REMOTE_DEMO.md](../demo/REMOTE_DEMO.md).
+
 ## Tearing down
 
 Set `db_deletion_protection = false`, apply, then `terraform destroy`. RDS

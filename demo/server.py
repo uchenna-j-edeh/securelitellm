@@ -38,8 +38,9 @@ LOGS_DIR.mkdir(exist_ok=True)
 AGENT_ID = os.environ.get("DEMO_AGENT_ID", "")
 MASTER_KEY = os.environ.get("DEMO_AGENT_KEY") or os.environ.get("LITELLM_MASTER_KEY", "")
 # The approver (#174). The demo presenter approves as the proxy admin; the
-# agent's own key can't reach the approval routes.
-ADMIN_KEY = os.environ.get("LITELLM_MASTER_KEY", "")
+# agent's own key can't reach the approval routes. DEMO_APPROVER_KEY, a key of
+# a proxy_admin user, lets a participant approve without the master key.
+ADMIN_KEY = os.environ.get("DEMO_APPROVER_KEY") or os.environ.get("LITELLM_MASTER_KEY", "")
 APPROVALS_PATH = "/securelitellm/approvals"
 CONTAINER_NAME = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
 
