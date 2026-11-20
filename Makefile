@@ -1,4 +1,4 @@
-.PHONY: test-db-up test-db-down lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-live eval-live-dry eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay demo-agent-block demo-agent-unblock gmail-auth
+.PHONY: test-db-up test-db-down lint test test-e2e e2e-up e2e-down up down dev eval eval-conditions eval-live eval-live-dry eval-dry freeze classifier-up demo-setup demo-check demo-check-live demo demo-tools demo-mcp demo-dual-up demo-dual-down demo-replay demo-agent-block demo-agent-unblock gmail-auth watch-decisions
 
 # Well-known key used exclusively for E2E tests — never the production key.
 E2E_KEY := sk-test-e2e-key
@@ -176,3 +176,8 @@ demo-dual-down:
 # Freeze corpus + env snapshot for reproducibility (#47)
 freeze:
 	$(PYTHON) harness/freeze.py --tag
+
+# Stream proxy decisions from CloudWatch, one line each (see scripts/watch_decisions.py).
+# make watch-decisions ARGS="--since 1h"  |  ARGS="--file demo/logs/decisions.jsonl"
+watch-decisions:
+	$(PYTHON) scripts/watch_decisions.py $(ARGS)
