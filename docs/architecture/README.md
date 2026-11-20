@@ -1,7 +1,5 @@
 # SecureLiteLLM — Architecture
 
-> **Diagrams page:** open [diagrams.html](diagrams.html) in a browser for the current system, AWS deployment and threat-model diagrams (simple views first, detailed views behind a toggle).
-
 ## High-Level Architecture
 
 The system is security middleware that lives inside the LiteLLM proxy. It intercepts agent traffic on the way to the model (pre-call) and on the way back (post-call), scores each request against both its own content and accumulated per-agent-run state, and routes on risk rather than cost.
