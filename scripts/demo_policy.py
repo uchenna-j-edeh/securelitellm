@@ -123,7 +123,10 @@ def main() -> int:
     except ValueError as exc:
         print(f"demo policy is invalid: {exc}", file=sys.stderr)
         return 2
-    TARGET.write_text(HEADER + yaml.safe_dump(policy, sort_keys=False, allow_unicode=True))
+    TARGET.write_text(
+        HEADER + yaml.safe_dump(policy, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
     print(
         f"wrote {TARGET.relative_to(REPO_ROOT)} (allowlist and user_named on; recipient {recipient})"
     )

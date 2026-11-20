@@ -74,7 +74,7 @@ def access_token(path: Path, scope: str) -> str:
                 f"Gmail sign-in expired or was revoked ({exc}); "
                 f"run 'make gmail-auth SCOPE={kind}' again"
             ) from exc
-        path.write_text(credentials.to_json())
+        path.write_text(credentials.to_json(), encoding="utf-8")
     return credentials.token
 
 

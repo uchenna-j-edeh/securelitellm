@@ -92,7 +92,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, interrupt)
     signal.signal(signal.SIGINT, interrupt)
 
-    env = {**os.environ, **values, "PYTHONPATH": str(ROOT)}
+    # UTF-8 mode (#244): on Windows, Python otherwise reads and writes text as
+    # cp1252, and the demo page, corpus and logs are UTF-8. The demo's own
+    # file calls name utf-8; this also covers libraries and child output.
+    env = {**os.environ, **values, "PYTHONPATH": str(ROOT), "PYTHONUTF8": "1"}
     tool_port = int(values.get("MCP_SERVER_PORT", "8002"))
     ui_port = values.get("DEMO_PORT", "8003")
 

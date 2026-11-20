@@ -57,7 +57,7 @@ def main(argv: list[str]) -> int:
 
     path = token_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(credentials.to_json())
+    path.write_text(credentials.to_json(), encoding="utf-8")
     path.chmod(0o600)
     print(f"wrote {path} ({argv[0]} only)")
     return 0

@@ -47,7 +47,7 @@ class AgentSetupError(Exception):
 
 def _parse_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -73,11 +73,11 @@ def prepare(path: Path | None = None) -> list[str]:
     }
     missing = {name: make() for name, make in wanted.items() if not values.get(name)}
     if missing:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if text and not text.endswith("\n"):
             text += "\n"
         text += "".join(f"{name}={value}\n" for name, value in missing.items())
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return sorted(missing)
 

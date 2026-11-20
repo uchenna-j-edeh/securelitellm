@@ -99,7 +99,7 @@ def _scan_results_dir() -> None:
                 entry = _cache.get(key)
                 if entry is None or entry.sha256 != new_hash:
                     _cache[key] = _CacheEntry(
-                        content=path.read_text().strip(),
+                        content=path.read_text(encoding="utf-8").strip(),
                         sha256=new_hash,
                         updated_at=time.monotonic(),
                     )
@@ -296,7 +296,7 @@ def read_file(req: ReadFileRequest) -> dict:
         return {"error": "access denied"}
     if not safe_path.exists():
         return {"error": f"file not found: {req.path}"}
-    return {"content": _render_demo_content(safe_path.read_text())}
+    return {"content": _render_demo_content(safe_path.read_text(encoding="utf-8"))}
 
 
 @app.post("/tools/search_knowledge_base")
@@ -304,10 +304,10 @@ def search_knowledge_base(req: KBSearchRequest) -> dict:
     query = req.query.lower()
     for doc in sorted(KB_DIR.glob("*.txt")):
         if any(word in doc.stem.lower() for word in query.split()):
-            return {"document": doc.stem, "content": doc.read_text()}
+            return {"document": doc.stem, "content": doc.read_text(encoding="utf-8")}
     docs = sorted(KB_DIR.glob("*.txt"))
     if docs:
-        return {"document": docs[0].stem, "content": docs[0].read_text()}
+        return {"document": docs[0].stem, "content": docs[0].read_text(encoding="utf-8")}
     return {"result": "no documents found"}
 
 
@@ -441,7 +441,7 @@ def send_email(req: SendEmailRequest) -> dict:
         record["status"] = "logged"
         record["delivery_mode"] = "log"
 
-    with OUTBOX.open("a") as f:
+    with OUTBOX.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
     return {
         "status": record["status"],
@@ -540,7 +540,7 @@ def http_post(req: HttpPostRequest) -> dict:
         "url": req.url,
         "data": req.data,
     }
-    with WEBHOOK_LOG.open("a") as f:
+    with WEBHOOK_LOG.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
     return {"status": "ok", "url": req.url}
 

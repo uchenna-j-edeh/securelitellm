@@ -124,7 +124,7 @@ def check_work_tools(
             continue
         scope = f"https://www.googleapis.com/auth/gmail.{'readonly' if kind == 'read' else 'send'}"
         try:
-            token = json.loads(path.read_text())
+            token = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise SetupError(
                 f"Gmail {kind} token is missing or invalid; run make gmail-auth SCOPE={kind}."
