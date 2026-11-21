@@ -67,7 +67,7 @@ _sessions: dict[str, dict] = {}
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    return HTMLResponse((DEMO_DIR / "static" / "index.html").read_text())
+    return HTMLResponse((DEMO_DIR / "static" / "index.html").read_text(encoding="utf-8"))
 
 
 @app.get("/config")
@@ -264,7 +264,9 @@ async def outbox() -> dict:
     if not p.exists():
         return {"emails": []}
     return {
-        "emails": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]
+        "emails": [
+            json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()
+        ][-20:]
     }
 
 
@@ -274,7 +276,9 @@ async def webhook_log() -> dict:
     if not p.exists():
         return {"posts": []}
     return {
-        "posts": [json.loads(line) for line in p.read_text().splitlines() if line.strip()][-20:]
+        "posts": [
+            json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()
+        ][-20:]
     }
 
 
