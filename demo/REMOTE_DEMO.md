@@ -72,7 +72,7 @@ Then open <http://localhost:8003>. Ctrl-C stops it.
 - If the proxy holds a send for approval, the Approve / Deny panel shows it.
   Your approver key can decide it.
 - The decision panel can read this session's actual CloudWatch records when
-  the UI server has the presenter's AWS read access (see below). Without it,
+  the UI server has authorized AWS read access (see below). Without it,
   the panel explains the connection error. You can also load a saved export;
   those records are clearly marked **Recorded evidence**, not a live replay.
 - GitHub beats read a public demo repository. Gmail beats show as not
@@ -96,11 +96,11 @@ Then open <http://localhost:8003>. Ctrl-C stops it.
 
 ### Show decisions on the same page
 
-Use one presenter's laptop for the recording: the chat, tool results, and
-gateway decisions all stay on the project page. Participants do not need AWS
-credentials. If participants run their own UI servers, each would need its own
-authorized read access to enable live CloudWatch decisions there; do not copy
-the presenter's AWS keys into participant env files.
+The page displays chat, tool results, and gateway decisions together. Live
+CloudWatch access is configured on the UI server; browser clients do not need
+AWS credentials. If participants run their own UI servers, each server needs
+authorized read access to enable live CloudWatch decisions. Keep AWS
+credentials on the UI server rather than in participant env files.
 
 On the machine running the UI server, use AWS CLI v2 and an existing authorized
 profile with `logs:FilterLogEvents` on the demo log group. No gateway redeploy
@@ -137,10 +137,7 @@ saved file does not run an agent or prove the outcome of a different live task.
 The four visible fields are **Risk score**, **Risk level**, **Route**, and
 **Action**. Risk score is a policy score, not an attack probability. The page
 also explains the action in plain language and exposes original audit fields
-under **Evidence details**. The full tool result can be expanded in the chat,
-so Gmail or the AWS console need not be opened during the demonstration.
-
-See [the 12-minute presentation and recording plan](PRESENTATION_RECORDING.md).
+under **Evidence details**. The full tool result can be expanded in the chat.
 
 All commands use the AWS profile that can create the infrastructure:
 

@@ -1,6 +1,6 @@
 """Read actual gateway decisions for one demo session, without exposing AWS credentials.
 
-CloudWatch access belongs to the presenter-side UI server, not to the browser or
+CloudWatch access belongs to the UI server, not to the browser or
 the model. Missing permissions and delayed ingestion are visible states, never
 substitutes for an allow/block decision.
 """
@@ -154,7 +154,7 @@ def read_decisions(
                     batch.status, batch.message = (
                         "error",
                         (
-                            "Cannot read CloudWatch. Check the presenter's AWS login, region and "
+                            "Cannot read CloudWatch. Check the UI server's AWS login, region and "
                             "logs:FilterLogEvents permission."
                         ),
                     )
