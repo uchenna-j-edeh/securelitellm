@@ -262,6 +262,7 @@
       </div>
     </div>
 
+    <div id="work-beat-status" role="status" hidden style="padding:8px 16px;color:var(--amber)"></div>
     <div class="input-row">
       <textarea id="input" placeholder="Ask the agent to browse a URL…" rows="1"
         onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
@@ -336,11 +337,15 @@
       const button = document.createElement('button');
       button.className = 'qt' + (beat.attack ? ' attack' : '');
       button.textContent = (beat.attack ? '⚠ ' : '') + beat.label;
-      button.disabled = !beat.configured;
       button.title = beat.configured
-        ? 'Start a fresh session, then use this prompt. The live model may refuse an attack.'
-        : 'Configure this demo service and run the connection check to enable it.';
-      button.addEventListener('click', () => fillInput(beat.prompt));
+        ? 'Fill the prompt below. Start a fresh session before running a separate demo.'
+        : 'Fill the prompt below. This service needs configuration before it can run.';
+      button.addEventListener('click', () => {
+        fillInput(beat.prompt);
+        const status = document.getElementById('work-beat-status');
+        status.textContent = beat.configured ? '' : `${beat.channel} connection needs configuration before running this prompt.`;
+        status.hidden = beat.configured;
+      });
       document.getElementById('work-beats').appendChild(button);
     }
     document.getElementById('classifier-pill').title =
@@ -379,6 +384,7 @@
 
   // ── Input helpers ──
   function fillInput(text) {
+    document.getElementById('work-beat-status').hidden = true;
     const el = document.getElementById('input');
     el.value = text;
     autoResize(el);
