@@ -9,6 +9,11 @@ This demo answers one research question:
 The router is the experimental instrument. The result to show is not merely that a
 classifier can label malicious text; it is whether the resulting tool action executes.
 
+For the final presentation, see the [12-minute slide and 5-minute recording
+plan](PRESENTATION_RECORDING.md). The project page can now show session-scoped
+CloudWatch decisions directly; setup and saved-log import are described in
+[the remote-demo guide](REMOTE_DEMO.md#show-decisions-on-the-same-page).
+
 ## What this demo does and does not claim
 
 - **In scope:** indirect/content-borne prompt injection from a web result or file that

@@ -116,7 +116,16 @@ def server(monkeypatch):
     from demo import server as srv
 
     monkeypatch.setattr(srv, "_sessions", {})
-    monkeypatch.setattr(srv, "_decisions_for_session", lambda ref, container=None: [])
+    monkeypatch.setattr(
+        srv,
+        "_session_decisions",
+        lambda ui, mode: {
+            "source": "docker",
+            "status": "waiting",
+            "records": [],
+            "message": "No decisions yet.",
+        },
+    )
     monkeypatch.setattr(srv.time, "sleep", lambda s: None)
     return srv
 

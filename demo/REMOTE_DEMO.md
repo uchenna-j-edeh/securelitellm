@@ -67,12 +67,14 @@ Then open <http://localhost:8003>. Ctrl-C stops it.
 - Pick a beat and send it, or type your own request. The agent's tool calls
   (web pages, files, email) run on your laptop; email is only logged, never
   sent.
-- Only **session** mode exists in AWS. The stateless mode switch fails at
-  once; that's expected.
+- Only **session** mode exists in the default AWS deployment. The stateless
+  switch is disabled unless a stateless proxy URL is explicitly configured.
 - If the proxy holds a send for approval, the Approve / Deny panel shows it.
   Your approver key can decide it.
-- The decision panel stays empty: decisions are read from CloudWatch by the
-  presenter. Each one is tagged with your agent name, `demo-<your-name>`.
+- The decision panel can read this session's actual CloudWatch records when
+  the UI server has the presenter's AWS read access (see below). Without it,
+  the panel explains the connection error. You can also load a saved export;
+  those records are clearly marked **Recorded evidence**, not a live replay.
 - GitHub beats read a public demo repository. Gmail beats show as not
   configured (they need the presenter's mailbox).
 - **Jira beats:** open `securelitellm-demo.env`, fill in your own
@@ -91,6 +93,54 @@ Then open <http://localhost:8003>. Ctrl-C stops it.
 | "address already in use" on 8002 or 8003 | Another copy is running: stop it, or set `DEMO_PORT` / `MCP_SERVER_PORT` and `DEMO_TOOL_SERVER_URL` in the env file |
 
 ## Presenter
+
+### Show decisions on the same page
+
+Use one presenter's laptop for the recording: the chat, tool results, and
+gateway decisions all stay on the project page. Participants do not need AWS
+credentials. If participants run their own UI servers, each would need its own
+authorized read access to enable live CloudWatch decisions there; do not copy
+the presenter's AWS keys into participant env files.
+
+On the machine running the UI server, use AWS CLI v2 and an existing authorized
+profile with `logs:FilterLogEvents` on the demo log group. No gateway redeploy
+or IAM write permission is needed for this page change. Before starting the UI:
+
+```bash
+export DEMO_DECISION_SOURCE=cloudwatch
+export DEMO_CLOUDWATCH_PROFILE=securelitellm-infra  # or your existing read-only profile
+export DEMO_CLOUDWATCH_REGION=us-east-1
+export DEMO_CLOUDWATCH_LOG_GROUP=/ecs/securelitellm-dryrun
+uv run python scripts/demo_remote.py ~/<your-name>/securelitellm-demo.env
+```
+
+`DEMO_CLOUDWATCH_PROFILE` falls back to `DRYRUN_AWS_PROFILE`, then the AWS CLI's
+normal credential chain. AWS settings stay on the UI server. The browser can
+ask only for a server-owned UI session, never an arbitrary CloudWatch query.
+Records must match that session's fingerprint, configured agent (when set),
+and memory mode. The panel polls during the task and for 30 seconds afterwards
+to accommodate log ingestion delay; **Refresh logs** retries later. It shows
+source errors explicitly rather than inventing a decision. Repeated polls do
+not duplicate cards or counters.
+
+For a local Docker stack, `DEMO_DECISION_SOURCE=docker` uses the proxy container
+logs. `auto` (the default) chooses CloudWatch for the remote launcher and Docker
+for localhost proxies.
+
+**Saved evidence:** click **Load recorded log** and select a CloudWatch Logs
+Insights JSON export (`@message` as JSON text or an object), or raw decision
+JSONL. The file is read in the browser, not uploaded to AWS or the model. Choose
+one agent/session if the export contains several. The banner explicitly says
+these are recorded records. **New Session** returns to live mode. Loading a
+saved file does not run an agent or prove the outcome of a different live task.
+
+The four visible fields are **Risk score**, **Risk level**, **Route**, and
+**Action**. Risk score is a policy score, not an attack probability. The page
+also explains the action in plain language and exposes original audit fields
+under **Evidence details**. The full tool result can be expanded in the chat,
+so Gmail or the AWS console need not be opened during the demonstration.
+
+See [the 12-minute presentation and recording plan](PRESENTATION_RECORDING.md).
 
 All commands use the AWS profile that can create the infrastructure:
 

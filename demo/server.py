@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import asdict
 from pathlib import Path
+from threading import Lock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -25,6 +26,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from demo.agent import MODEL, resume_chat, run_chat  # noqa: E402
+from demo.decisions import decision_key, read_decisions, source_name  # noqa: E402
 from demo.tools import TOOL_SERVER_URL  # noqa: E402
 from demo.work_beats import work_beats  # noqa: E402
 from router.session import session_ref  # noqa: E402
@@ -45,8 +47,8 @@ APPROVALS_PATH = "/securelitellm/approvals"
 CONTAINER_NAME = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
 
 # Dual-proxy wiring for the live A/B delayed-exfil demo. Each mode points at a
-# separate proxy container running a different ROUTER_MODE; the decision log is
-# read from whichever container served the turn.
+# separate proxy running a different ROUTER_MODE; audit records are read from
+# the selected Docker container or filtered by mode in CloudWatch.
 PROXY_BY_MODE = {
     "session": os.environ.get("PROXY_URL_SESSION", "http://localhost:4000"),
     "stateless": os.environ.get("PROXY_URL_STATELESS", "http://localhost:4001"),
@@ -89,6 +91,10 @@ async def demo_config() -> dict:
         "email_mode": os.environ.get("DEMO_EMAIL_MODE", "log"),
         "demo_recipient": os.environ.get("DEMO_RECIPIENT", "demo-recipient@example.test"),
         "work_beats": work_beats(),
+        "decision_source": source_name(),
+        "available_modes": ["session"]
+        if os.environ.get("DEMO_REMOTE") == "1" and not os.environ.get("PROXY_URL_STATELESS")
+        else list(PROXY_BY_MODE),
     }
 
 
@@ -101,7 +107,6 @@ async def chat(request: Request) -> StreamingResponse:
     if mode not in PROXY_BY_MODE:
         mode = "session"
     proxy_url = PROXY_BY_MODE[mode]
-    container = CONTAINER_BY_MODE[mode]
 
     if not user_message:
         return StreamingResponse(
@@ -109,7 +114,10 @@ async def chat(request: Request) -> StreamingResponse:
             media_type="text/event-stream",
         )
 
-    ui = _sessions.setdefault(session_id, {"proxy_id": None, "history": []})
+    ui = _sessions.setdefault(
+        session_id, {"proxy_id": None, "history": [], "created_at": time.time()}
+    )
+    ui["mode"] = mode
     events = run_chat(
         user_message=user_message,
         history=ui["history"],
@@ -118,7 +126,7 @@ async def chat(request: Request) -> StreamingResponse:
         proxy_url=proxy_url,
     )
     return StreamingResponse(
-        _stream_turn(ui, events, mode, container, session_id, user_message),
+        _stream_turn(ui, events, mode, session_id, user_message),
         media_type="text/event-stream",
     )
 
@@ -146,12 +154,12 @@ async def chat_resume(request: Request) -> StreamingResponse:
         pending, ui["proxy_id"], master_key=MASTER_KEY, proxy_url=PROXY_BY_MODE[mode]
     )
     return StreamingResponse(
-        _stream_turn(ui, events, mode, CONTAINER_BY_MODE[mode], session_id, None),
+        _stream_turn(ui, events, mode, session_id, None),
         media_type="text/event-stream",
     )
 
 
-def _stream_turn(ui: dict, events, mode: str, container: str, session_id: str, user_message):
+def _stream_turn(ui: dict, events, mode: str, session_id: str, user_message):
     """Relay the agent's events to the browser, then the session's decision records."""
     assistant_content = None
     was_blocked = False
@@ -182,10 +190,10 @@ def _stream_turn(ui: dict, events, mode: str, container: str, session_id: str, u
         if event["kind"] == "session_reset":
             reset = True
 
-    # Pull decision records for this session from container logs
-    time.sleep(0.5)
-    ref = session_ref(ui["proxy_id"]) if ui["proxy_id"] else None
-    decisions = _decisions_for_session(ref, container) if ref else []
+    # The browser also polls after completion: CloudWatch can ingest records late.
+    batch = _session_decisions(ui, mode)
+    decisions = batch["records"]
+    yield f"data: {json.dumps({'kind': 'decision_status', **{k: v for k, v in batch.items() if k != 'records'}})}\n\n"
     for d in decisions:
         yield f"data: {json.dumps({'kind': 'decision', 'record': d})}\n\n"
 
@@ -291,29 +299,48 @@ async def clear_logs() -> dict:
     return {"status": "cleared"}
 
 
-def _decisions_for_session(ref: str, container: str = CONTAINER_NAME) -> list[dict]:
-    """Decision records whose session_id (a session_ref) matches *ref*."""
-    try:
-        result = subprocess.run(
-            ["docker", "logs", "--tail", "200", container],
-            capture_output=True,
-            text=True,
-            timeout=5,
+def _session_decisions(ui: dict, mode: str) -> dict:
+    """Bound queries to a server-owned session and retain late-arriving records."""
+    ref = session_ref(ui["proxy_id"]) if ui.get("proxy_id") else None
+    if not ref:
+        return {
+            "source": source_name(),
+            "status": "waiting",
+            "records": [],
+            "message": "Send a request to start collecting this session's decisions.",
+        }
+    lock = ui.setdefault("decision_lock", Lock())
+    with lock:
+        now = time.monotonic()
+        if now - ui.get("decision_fetched_at", -100) < 2 and "decision_batch" in ui:
+            return ui["decision_batch"]
+        batch = read_decisions(
+            ref,
+            agent=AGENT_ID,
+            mode=mode,
+            container=CONTAINER_BY_MODE[mode],
+            since_ms=int((ui.get("created_at", time.time()) - 30) * 1000),
         )
-        records = []
-        for line in (result.stdout + result.stderr).splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                d = json.loads(line)
-                if d.get("session_id") == ref and "features" in d:
-                    records.append(d)
-            except json.JSONDecodeError:
-                pass
-        return records
-    except Exception:
-        return []
+        records = ui.setdefault("decisions", {})
+        records.update((decision_key(record), record) for record in batch.records)
+        result = asdict(batch)
+        result["records"] = sorted(records.values(), key=lambda r: r.get("ts", ""))[-300:]
+        ui["decision_batch"] = result
+        ui["decision_fetched_at"] = time.monotonic()
+        return result
+
+
+@app.get("/decisions")
+def decisions(session_id: str = "", mode: str = "session") -> dict:
+    ui = _sessions.get(session_id)
+    if not ui or mode not in PROXY_BY_MODE or ui.get("mode", mode) != mode:
+        return {
+            "source": source_name(),
+            "status": "waiting",
+            "records": [],
+            "message": "No active session. Send a request first.",
+        }
+    return _session_decisions(ui, mode)
 
 
 if __name__ == "__main__":
