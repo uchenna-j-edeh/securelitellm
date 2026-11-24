@@ -67,12 +67,14 @@ Then open <http://localhost:8003>. Ctrl-C stops it.
 - Pick a beat and send it, or type your own request. The agent's tool calls
   (web pages, files, email) run on your laptop; email is only logged, never
   sent.
-- Only **session** mode exists in AWS. The stateless mode switch fails at
-  once; that's expected.
+- Only **session** mode exists in the default AWS deployment. The stateless
+  mode switch is disabled unless a stateless proxy URL is configured.
 - If the proxy holds a send for approval, the Approve / Deny panel shows it.
   Your approver key can decide it.
-- The decision panel stays empty: decisions are read from CloudWatch by the
-  presenter. Each one is tagged with your agent name, `demo-<your-name>`.
+- The decision panel receives decisions directly from gateway response metadata.
+  It does not read CloudWatch or need an AWS login. Detailed metrics require
+  authorized admin history access or the gateway's explicit demo setting;
+  see [the decision API guide](DECISION_API.md).
 - GitHub beats read a public demo repository. Gmail beats show as not
   configured (they need the presenter's mailbox).
 - **Jira beats:** open `securelitellm-demo.env`, fill in your own

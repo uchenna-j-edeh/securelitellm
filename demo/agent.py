@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from demo.decision_transport import response_decisions
 from demo.tools import TOOL_SCHEMAS, TOOL_SERVER_URL, call_tool
 from router.session import session_ref
 
@@ -169,6 +170,17 @@ def _agent_loop(
             yield _event("error", message=f"Proxy unreachable: {exc}")
             return
 
+        issued = resp.headers.get(SESSION_HEADER)
+        if issued and not session_id:
+            session_id, ref = issued, session_ref(issued)
+            headers[SESSION_HEADER] = session_id
+            yield _event("proxy_session", session_id=session_id, session_ref=ref)
+        # Read transport metadata before handling errors, resets or generated
+        # calls. A blocked first request and a held post-call both have evidence.
+        decisions = response_decisions(resp)
+        for record in decisions:
+            yield _event("decision", record=record)
+
         if resp.status_code != 200:
             body = {}
             try:
@@ -209,13 +221,9 @@ def _agent_loop(
                 message=error_msg,
                 session_ref=ref,
             )
+            if is_blocked and decisions and decisions[-1]["action"] == "block":
+                yield _event("block_context", record=decisions[-1])
             return
-
-        issued = resp.headers.get(SESSION_HEADER)
-        if issued and not session_id:
-            session_id, ref = issued, session_ref(issued)
-            headers[SESSION_HEADER] = session_id
-            yield _event("proxy_session", session_id=session_id, session_ref=ref)
 
         routed = parse_route_header(resp.headers.get(ROUTE_HEADER))
         if routed:

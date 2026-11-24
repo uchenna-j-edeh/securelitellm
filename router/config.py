@@ -23,6 +23,7 @@ _UNSAFE_IF_LOCKED: list[tuple[str, object]] = [
     # The route header tells a caller whether their content was flagged, which
     # lets them probe the classifier; demo and debugging only.
     ("route_header", True),
+    ("expose_decisions", True),
     # Without it every caller can share the master key, so decisions can't be
     # attributed to an agent and one agent can't be revoked (#148).
     ("require_agent_key", False),
@@ -49,6 +50,7 @@ class RouterConfig:
     litellm_config_path: str = ""  # LiteLLM config whose model_list routes are checked against
     lock: bool = False  # ROUTER_LOCK=true rejects unsafe configs at startup
     route_header: bool = False  # ROUTER_ROUTE_HEADER=true returns x-securelitellm-route
+    expose_decisions: bool = False  # Demo only: detailed decisions for ordinary agent keys
     # ROUTER_REQUIRE_AGENT_KEY=true: only a virtual key with a user_id may send
     # model requests; the master key is for administration only (#148).
     require_agent_key: bool = False
@@ -64,6 +66,11 @@ class RouterConfig:
         litellm_config_path = os.getenv("ROUTER_LITELLM_CONFIG", "")
         lock = os.getenv("ROUTER_LOCK", "false").lower() in ("1", "true", "yes")
         route_header = os.getenv("ROUTER_ROUTE_HEADER", "false").lower() in ("1", "true", "yes")
+        expose_decisions = os.getenv("SECURELITELLM_EXPOSE_DECISIONS", "false").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
         require_agent_key = os.getenv("ROUTER_REQUIRE_AGENT_KEY", "false").lower() in (
             "1",
             "true",
@@ -94,6 +101,7 @@ class RouterConfig:
             litellm_config_path=litellm_config_path,
             lock=lock,
             route_header=route_header,
+            expose_decisions=expose_decisions,
             require_agent_key=require_agent_key,
         )
 
@@ -119,5 +127,6 @@ class RouterConfig:
             "policy_sha256": _policy_sha256(self.policy_path),
             "lock": self.lock,
             "route_header": self.route_header,
+            "expose_decisions": self.expose_decisions,
             "require_agent_key": self.require_agent_key,
         }

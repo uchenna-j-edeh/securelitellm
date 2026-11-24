@@ -7,6 +7,7 @@
   "required": ["ts", "session_id", "request_id", "mode", "level", "features", "risk_score", "action", "latency_ms"],
   "additionalProperties": true,
   "properties": {
+    "decision_id": { "type": "string", "pattern": "^[a-f0-9]{32}$", "description": "Gateway-generated correlation id for pre_call/post_call decisions (#250), shared by the audit record, response metadata and history. Never a session credential." },
     "ts":         { "type": "string", "format": "date-time", "description": "UTC timestamp (ISO-8601)" },
     "session_id": { "type": "string", "description": "Agent run ID (x-agent-run-id header or fallback)" },
     "agent":      { "type": ["string", "null"], "description": "Agent that sent the request: the user_id of its LiteLLM virtual key (#148). Null for the master key or a key with no user_id." },

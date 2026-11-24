@@ -541,6 +541,7 @@ def test_startup_reports_the_approval_ttl_and_registers_the_admin_routes(make_ho
     assert startup["approval_ttl_seconds"] == 600
     assert startup["controls"]["approvals"] == "on"
     assert app.routes == [
+        ("/securelitellm/decisions", ["GET"]),
         ("/securelitellm/approvals", ["GET"]),
         ("/securelitellm/approvals/{approval_ref}/approve", ["POST"]),
         ("/securelitellm/approvals/{approval_ref}/deny", ["POST"]),

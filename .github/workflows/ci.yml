@@ -47,6 +47,13 @@ jobs:
       - name: Unit tests
         run: uv run pytest tests/ -v --ignore=tests/test_e2e.py
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Decision panel tests
+        run: node --test tests/test_demo_decisions_ui.cjs
+
       # The same suite again with every fixture-built session store on Postgres:
       # decisions must not depend on the backend (#169).
       - name: Unit tests on the Postgres session store

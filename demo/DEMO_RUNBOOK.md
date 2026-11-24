@@ -9,6 +9,9 @@ This demo answers one research question:
 The router is the experimental instrument. The result to show is not merely that a
 classifier can label malicious text; it is whether the resulting tool action executes.
 
+The page shows gateway decisions from response metadata. See the
+[decision API guide](DECISION_API.md) for disclosure controls and history setup.
+
 ## What this demo does and does not claim
 
 - **In scope:** indirect/content-borne prompt injection from a web result or file that

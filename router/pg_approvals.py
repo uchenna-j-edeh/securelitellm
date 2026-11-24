@@ -55,7 +55,7 @@ from router.approvals import (
     calls_hash,
 )
 from router.pg_session import APPROVALS_TABLE as TABLE
-from router.pg_session import SCHEMA_VERSION, _Database
+from router.pg_session import _Database
 
 Clock = Callable[[], float]
 
@@ -65,6 +65,7 @@ _COLUMNS = (
 )
 _OPEN = ("pending", "approved")
 SWEEP_INTERVAL = 5.0  # seconds between a process's expiry sweeps
+APPROVAL_MAC_VERSION = 2  # Preserve signatures when unrelated tables are added.
 
 
 def _derive(secret: bytes, label: bytes) -> bytes:
@@ -391,7 +392,7 @@ class PostgresApprovalStore:
         summary = json.dumps(row.summary, sort_keys=True, separators=(",", ":"))
         material = json.dumps(
             [
-                SCHEMA_VERSION,
+                APPROVAL_MAC_VERSION,
                 row.key,
                 row.session_key,
                 row.owner,
