@@ -102,6 +102,20 @@ A UI server restart loses its handle mapping and requires a new UI session;
 gateway history remains available to authorized admins. Decisions received
 before a rejected session remain visible after that session is cleared.
 
+Reload also restores the visible conversation (including tool results and
+blocked outcomes) and labels it as an existing session. It does not silently
+clear gateway taint. New Session starts a fresh conversation; an unavailable
+stored proxy mode or an unavailable conversation snapshot also selects a fresh
+UI handle. HTTP LAN pages use `crypto.getRandomValues` when `randomUUID` is
+unavailable. Pending approval credentials and held messages stay server-side.
+
+Offline `RouterHook()` instances never register proxy routes. The configured
+module callback binds them at proxy startup (or lazily on its first request);
+explicit integrations can use `register_proxy_routes(app, auth)`. A second
+hook cannot replace an app's history binding. Failed captures are removed
+after attaching the error body; a signed request-local summary preserves
+headers on LiteLLM error paths that invoke their headers hook afterwards.
+
 Saved audit exports may be loaded manually as **Recorded evidence**. They are
 processed in the browser and clearly distinguished from current responses;
 loading one neither runs an agent nor demonstrates a new live outcome.

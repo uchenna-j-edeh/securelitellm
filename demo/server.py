@@ -59,6 +59,14 @@ app.mount("/static", StaticFiles(directory=str(DEMO_DIR / "static")), name="stat
 #   {"proxy_id": raw proxy-issued x-agent-run-id or None, "history": [messages]}
 # The raw proxy id is a session secret: it stays here and never reaches the browser.
 _sessions: dict[str, dict] = {}
+TRANSCRIPT_EVENTS = 500
+
+
+def _remember_event(ui: dict, event: dict) -> None:
+    # Only the same public, sanitized events already sent to this browser.
+    events = ui.setdefault("events", [])
+    events.append(event)
+    del events[:-TRANSCRIPT_EVENTS]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -120,6 +128,7 @@ async def chat(request: Request) -> StreamingResponse:
             media_type="text/event-stream",
         )
     ui["mode"] = mode
+    _remember_event(ui, {"kind": "user_message", "content": user_message})
     events = run_chat(
         user_message=user_message,
         history=ui["history"],
@@ -196,6 +205,8 @@ def _stream_turn(ui: dict, events, mode: str, session_id: str, user_message):
                 "session_ref": event["session_ref"],
                 "mode": mode,
             }
+        if event["kind"] not in {"decision", "decision_status", "assistant_tool_calls"}:
+            _remember_event(ui, event)
         yield f"data: {json.dumps(event)}\n\n"
 
         if event["kind"] == "assistant_message":
@@ -268,6 +279,20 @@ async def decide(approval_ref: str, decision: str, mode: str = "session") -> dic
 async def clear_session(session_id: str) -> dict:
     _sessions.pop(session_id, None)
     return {"status": "cleared"}
+
+
+@app.get("/session/{session_id}")
+def session_snapshot(session_id: str) -> dict:
+    """Restore visible context without exposing proxy credentials or held messages."""
+    ui = _sessions.get(session_id)
+    if ui is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "mode": ui.get("mode", "session"),
+        "events": ui.get("events", []),
+        "pending_approval": bool(ui.get("pending_approval")),
+    }
 
 
 @app.get("/outbox")

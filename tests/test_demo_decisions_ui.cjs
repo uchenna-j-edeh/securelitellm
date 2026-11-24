@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 class Element {
-  constructor() { this.children = []; this.dataset = {}; this._text = ''; }
+  constructor() { this.children = []; this.dataset = {}; this._text = ''; this.style = {}; this.classList = {toggle() {}}; }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text; }
   set innerHTML(value) { this._html = value; this.children = []; }
@@ -14,6 +14,7 @@ class Element {
   appendChild(element) { this.children.push(element); }
   replaceChildren(...elements) { this.children = elements; }
   querySelector() { return null; }
+  focus() {}
   insertBefore(element, before) {
     const index = this.children.indexOf(before);
     this.children.splice(index < 0 ? this.children.length : index, 0, element);
@@ -62,6 +63,18 @@ test('missing metrics stay unknown; observation mode never claims tools were rem
   assert.equal(el('latest-risk-level').textContent, '—');
   assert.match(el('decision-explanation').textContent, /Observation only/);
   assert.doesNotMatch(el('decision-explanation').textContent, /Tools removed/);
+  assert.equal(el('latest-action').textContent, 'observe');
+  assert.equal(el('s-strip').textContent, '0');
+});
+
+test('detailed audit-only blocks stay observations in every action cell and counter', () => {
+  const {panel, el} = setup();
+  panel.add(record({action: 'block', enforce: false}));
+  assert.equal(el('latest-action').textContent, 'observe');
+  assert.equal(el('s-block').textContent, '0');
+  const card = el('log-entries').children[0];
+  assert.equal(card.children[1].children[3].children[1].textContent, 'observe');
+  assert.match(card.children[2].children[1].textContent, /"action": "block"/);
 });
 
 test('a pending response for the previous browser session is discarded', async () => {
@@ -122,4 +135,76 @@ test('log labels are rendered as text, never interpreted as HTML', () => {
   panel.add(record({action: label, agent: label}));
   assert.equal(el('latest-action').textContent, label);
   assert.equal(el('latest-action')._html, undefined);
+});
+
+function setupPage({storedMode = 'session', available = ['session', 'stateless'], snapshot, restore} = {}) {
+  const {context, el} = setup();
+  const storage = new Map([['securelitellm-ui-session', 'old-ui-handle'], ['securelitellm-ui-mode', storedMode]]);
+  const requests = [];
+  let random = 0;
+  context.sessionStorage = {getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value)};
+  context.crypto = {getRandomValues: array => array.fill(++random)};
+  context.Uint8Array = Uint8Array;
+  context.clearInterval = () => {};
+  context.fetch = async url => {
+    requests.push(url);
+    if (url === '/config') return {json: async () => ({available_modes: available, work_beats: []})};
+    if (url.startsWith('/session/')) {
+      if (restore) return restore();
+      return {ok: true, json: async () => snapshot || {exists: false}};
+    }
+    return {ok: true, json: async () => ({records: [], status: 'waiting'})};
+  };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../demo/static/session.js'), 'utf8'), context);
+  const html = fs.readFileSync(path.join(__dirname, '../demo/static/index.html'), 'utf8');
+  vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], context);
+  return {context, el, storage, requests};
+}
+
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('HTTP LAN pages generate unpredictable handles without crypto.randomUUID', async () => {
+  const {context} = setupPage();
+  await settle();
+  const first = vm.runInContext('newUiSessionId()', context);
+  assert.match(first, /^demo-[a-f0-9]{32}$/);
+  assert.notEqual(vm.runInContext('newUiSessionId()', context), first);
+  context.crypto.randomUUID = () => 'secure-context-uuid';
+  assert.equal(vm.runInContext('newUiSessionId()', context), 'demo-secure-context-uuid');
+});
+
+test('refresh restores visible conversation and explicitly identifies the retained session', async () => {
+  const {context, el, storage} = setupPage({snapshot: {
+    exists: true, mode: 'session', pending_approval: false,
+    events: [{kind: 'user_message', content: 'Earlier request'}, {kind: 'assistant_message', content: 'Earlier reply'}],
+  }});
+  await settle();
+  const messages = el('messages').children.map(child => child._html || '').join(' ');
+  assert.match(messages, /Existing session restored/);
+  assert.match(messages, /Earlier request/);
+  assert.match(messages, /Earlier reply/);
+  assert.equal(storage.get('securelitellm-ui-session'), 'old-ui-handle');
+  assert.equal(vm.runInContext('restoring', context), false);
+});
+
+test('an unavailable stored mode mints a fresh handle before chat or history access', async () => {
+  const {context, storage, requests} = setupPage({storedMode: 'stateless', available: ['session']});
+  await settle();
+  assert.equal(vm.runInContext('MODE', context), 'session');
+  assert.equal(storage.get('securelitellm-ui-mode'), 'session');
+  assert.notEqual(storage.get('securelitellm-ui-session'), 'old-ui-handle');
+  assert.equal(requests.some(url => url.includes('old-ui-handle')), false);
+});
+
+test('failed or late restoration cannot hide earlier context behind an empty active session', async () => {
+  const failed = setupPage({restore: async () => { throw Error('offline'); }});
+  await settle();
+  assert.notEqual(failed.storage.get('securelitellm-ui-session'), 'old-ui-handle');
+  let resolve;
+  const late = setupPage({restore: () => new Promise(r => { resolve = r; })});
+  await settle();
+  vm.runInContext('newSession()', late.context);
+  resolve({ok: true, json: async () => ({exists: true, mode: 'session', events: [{kind: 'assistant_message', content: 'Stale hidden context'}]})});
+  await settle();
+  assert.equal(late.el('messages').children.length, 0);
 });

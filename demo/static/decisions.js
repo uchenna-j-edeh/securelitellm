@@ -97,6 +97,8 @@ class DecisionPanel {
       ? rec.risk_score.toFixed(3) : '—';
   }
 
+  action(rec) { return rec.enforce === false ? 'observe' : rec.action; }
+
   explanation(rec) {
     const meaning = {
       'allow': 'Request allowed to proceed. This does not by itself prove that an external action executed.',
@@ -145,7 +147,7 @@ class DecisionPanel {
     grid.className = 'decision-grid';
     for (const [label, value] of [
       ['Risk score', this.score(rec)], ['Risk level', rec.risk_level || '—'],
-      ['Route', rec.route || '—'], ['Action', rec.action],
+      ['Route', rec.route || '—'], ['Action', this.action(rec)],
     ]) {
       const group = document.createElement('div');
       const dt = document.createElement('dt');
@@ -173,13 +175,14 @@ class DecisionPanel {
       this.text('latest-risk-score', this.score(rec));
       this.text('latest-risk-level', rec.risk_level || '—');
       this.text('latest-route', rec.route || '—');
-      this.text('latest-action', rec.action);
+      this.text('latest-action', this.action(rec));
       this.text('decision-explanation', this.explanation(rec));
       this.text('decision-identity', `Agent: ${rec.agent || '—'} · Session: ${rec.session_id || '—'} · ${rec.phase || '—'} · ${rec.ts || '—'}`);
     }
     this.text('decision-count', `${this.records.size} decision${this.records.size === 1 ? '' : 's'}`);
     const counts = {allow: 0, harden: 0, strip: 0, block: 0};
     for (const record of this.records.values()) {
+      if (this.action(record) === 'observe') continue;
       if (['allow', 'execute'].includes(record.action)) counts.allow++;
       if (['hold', 'route-hardened'].includes(record.action)) counts.harden++;
       if (record.action === 'strip-tools') counts.strip++;

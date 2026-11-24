@@ -139,3 +139,67 @@ def test_missing_metadata_is_reported_without_inventing_a_decision(ui, monkeypat
     events = [json.loads(line[5:]) for line in result.text.splitlines() if line.startswith("data:")]
     assert not any(e["kind"] == "decision" for e in events)
     assert next(e for e in events if e["kind"] == "decision_status")["status"] == "unavailable"
+
+
+def test_refresh_snapshot_restores_visible_tools_and_the_same_agent_context(ui, monkeypatch):
+    calls = []
+
+    def run(**kw):
+        calls.append((list(kw["history"]), kw["session_id"]))
+        yield {
+            "kind": "proxy_session",
+            "session_id": "raw-server-session",
+            "session_ref": "public-ref",
+        }
+        yield {"kind": "tool_call", "call_id": "read", "name": "read_email", "args": {"id": "demo"}}
+        yield {
+            "kind": "tool_result",
+            "call_id": "read",
+            "name": "read_email",
+            "result": "Synthetic email",
+        }
+        yield {"kind": "assistant_message", "content": "Email summary"}
+
+    monkeypatch.setattr(server, "run_chat", run)
+    ui.post("/chat", json={"session_id": "browser-handle", "message": "Read email"})
+    snapshot = ui.get("/session/browser-handle").json()
+    assert snapshot["exists"] and snapshot["mode"] == "session"
+    assert [e["kind"] for e in snapshot["events"]] == [
+        "user_message",
+        "proxy_session",
+        "tool_call",
+        "tool_result",
+        "assistant_message",
+    ]
+    assert "raw-server-session" not in json.dumps(snapshot)
+    ui.post("/chat", json={"session_id": "browser-handle", "message": "Continue"})
+    assert calls[1] == (
+        [
+            {"role": "user", "content": "Read email"},
+            {"role": "assistant", "content": "Email summary"},
+        ],
+        "raw-server-session",
+    )
+    assert ui.get("/session/unknown-handle").json() == {"exists": False}
+
+
+def test_restored_pending_approval_never_exposes_held_turn_or_credential(ui, monkeypatch):
+    def run(**kw):
+        yield {
+            "kind": "proxy_session",
+            "session_id": "raw-server-session",
+            "session_ref": "public-ref",
+        }
+        yield {
+            "kind": "approval_pending",
+            "approval_id": "private-approval-token",
+            "messages": [{"role": "assistant", "content": "private-held-turn"}],
+            "session_ref": "public-ref",
+        }
+
+    monkeypatch.setattr(server, "run_chat", run)
+    ui.post("/chat", json={"session_id": "browser-handle", "message": "Review action"})
+    snapshot = ui.get("/session/browser-handle").json()
+    assert snapshot["pending_approval"] is True
+    for private in ("raw-server-session", "private-approval-token", "private-held-turn"):
+        assert private not in json.dumps(snapshot)

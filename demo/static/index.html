@@ -314,26 +314,32 @@
 </div>
 
 <script src="/static/decisions.js"></script>
+<script src="/static/session.js"></script>
 <script>
   const decisionPanel = new DecisionPanel();
   // Session state
-  let SESSION_ID = sessionStorage.getItem('securelitellm-ui-session') || 'demo-' + crypto.randomUUID();
+  let SESSION_ID = sessionStorage.getItem('securelitellm-ui-session') || newUiSessionId();
   let MODE = sessionStorage.getItem('securelitellm-ui-mode') || 'session';
   sessionStorage.setItem('securelitellm-ui-session', SESSION_ID);
   let running = false;
+  let restoring = true;
+  document.getElementById('send-btn').disabled = true;
   let outboxCount = 0;
   let DEMO_RECIPIENT = 'demo-recipient@example.test';
 
-  fetch('/config').then(r => r.json()).then(cfg => {
+  fetch('/config').then(r => r.json()).then(async cfg => {
     document.getElementById('agent-pill').textContent = cfg.agent;
     document.getElementById('model-pill').textContent = 'Requested model: ' + cfg.model_display;
     DEMO_RECIPIENT = cfg.demo_recipient || DEMO_RECIPIENT;
     decisionPanel.source = 'proxy response';
-    if (!(cfg.available_modes || ['session', 'stateless']).includes(MODE)) MODE = 'session';
+    if (!(cfg.available_modes || ['session', 'stateless']).includes(MODE)) {
+      MODE = 'session';
+      newSession();
+    }
+    sessionStorage.setItem('securelitellm-ui-mode', MODE);
     document.getElementById('mode-session').classList.toggle('active', MODE === 'session');
     document.getElementById('mode-stateless').classList.toggle('active', MODE === 'stateless');
     document.getElementById('mode-label').textContent = MODE + '/L3';
-    decisionPanel.restore(SESSION_ID, MODE);
     if (!(cfg.available_modes || ['session', 'stateless']).includes('stateless')) {
       const stateless = document.getElementById('mode-stateless');
       stateless.disabled = true;
@@ -356,16 +362,43 @@
     }
     document.getElementById('classifier-pill').title =
       `Tool service: ${cfg.tool_service} · Email mode: ${cfg.email_mode}`;
-  }).catch(() => {});
+    await restoreUiSession();
+    decisionPanel.restore(SESSION_ID, MODE);
+  }).catch(() => {
+    newSession();
+    appendBanner('intercepted', 'Started a new session', 'Previous context could not be restored.');
+  }).finally(() => {
+    restoring = false;
+    document.getElementById('send-btn').disabled = false;
+  });
+
+  async function restoreUiSession() {
+    const handle = SESSION_ID;
+    const response = await fetch('/session/' + encodeURIComponent(handle));
+    if (!response.ok) throw new Error('Session restore unavailable');
+    const snapshot = await response.json();
+    if (handle !== SESSION_ID) return;
+    if (!snapshot.exists || snapshot.mode !== MODE) {
+      newSession();
+      return;
+    }
+    clearWelcome();
+    appendBanner('intercepted', 'Existing session restored',
+      'Earlier conversation and gateway context are still active. Use New Session to start clean.');
+    for (const event of snapshot.events || []) handleEvent(event, true);
+    if (snapshot.pending_approval) appendApprovalCard(MODE);
+  }
 
   function newSession() {
     if (running) return;
     decisionPanel.reset();
-    SESSION_ID = 'demo-' + crypto.randomUUID();
+    SESSION_ID = newUiSessionId();
     sessionStorage.setItem('securelitellm-ui-session', SESSION_ID);
     sessionStorage.setItem('securelitellm-ui-mode', MODE);
     outboxCount = 0;
     getMessages().innerHTML = '';
+    clearInterval(approvalTimer);
+    for (const id of Object.keys(_pendingArgs)) delete _pendingArgs[id];
     document.getElementById('log-entries').innerHTML =
       '<div class="log-empty">No decisions yet.</div>';
     document.getElementById('s-allow').textContent = 0;
@@ -592,7 +625,7 @@
 
   // ── Send ──
   async function sendMessage() {
-    if (running) return;
+    if (running || restoring) return;
     const input = document.getElementById('input');
     const msg = input.value.trim();
     if (!msg) return;
@@ -697,7 +730,7 @@
   }
 
   async function decideApproval(card, ref, decision, mode) {
-    if (running) return;
+    if (running || restoring) return;
     card.querySelectorAll('button').forEach(b => b.disabled = true);
     clearInterval(approvalTimer);
     const r = await fetch(`/approvals/${encodeURIComponent(ref)}/${decision}?mode=${mode}`, {method: 'POST'});
@@ -733,8 +766,11 @@
 
   const _pendingArgs = {};
 
-  function handleEvent(ev) {
+  function handleEvent(ev, replaying = false) {
     switch (ev.kind) {
+      case 'user_message':
+        appendUserMsg(ev.content);
+        break;
       case 'assistant_tool_calls':
         break; // individual calls follow
       case 'tool_call':
@@ -760,7 +796,7 @@
         appendBanner('intercepted', '⚠️ Tool calls intercepted — ' + ev.action, ev.message || '');
         break;
       case 'approval_pending':
-        appendApprovalCard(ev.mode || MODE);
+        if (!replaying) appendApprovalCard(ev.mode || MODE);
         break;
       case 'approval_status':
         appendBanner('intercepted', '⏳ Approval ' + ev.status, ev.message || '');

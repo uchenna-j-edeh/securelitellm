@@ -121,7 +121,7 @@ class DecisionStore:
                     r
                     for o, _, r in self._records.values()
                     if r.get("session_id") == session and (owner is None or o == owner)
-                ]
+                ][-self.session_limit :]
             )
 
 

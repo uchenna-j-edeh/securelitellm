@@ -39,9 +39,6 @@ def record(**kw):
 def build_hook(monkeypatch, tmp_path):
     from router import hook as mod
 
-    app = FastAPI()
-    current_auth = [auth()]
-    monkeypatch.setattr(mod, "_proxy_app_and_auth", lambda: (app, lambda: current_auth[0]))
     monkeypatch.setenv("ROUTER_MODE", "session")
     monkeypatch.setenv("ROUTER_LEVEL", "L3")
     monkeypatch.setenv("CLASSIFIER_BACKEND", "none")
@@ -50,6 +47,8 @@ def build_hook(monkeypatch, tmp_path):
     monkeypatch.delenv("SECURELITELLM_EXPOSE_DECISIONS", raising=False)
 
     def build(rules=(), exposed=False):
+        app = FastAPI()
+        current_auth = [auth()]
         policy = {
             "controls": {"classifier": False, "allowlist": False},
             "rules": list(rules)
@@ -59,7 +58,9 @@ def build_hook(monkeypatch, tmp_path):
         path.write_text(yaml.safe_dump(policy))
         monkeypatch.setenv("POLICY_PATH", str(path))
         monkeypatch.setenv("SECURELITELLM_EXPOSE_DECISIONS", str(exposed).lower())
-        return mod.RouterHook(), app, current_auth
+        hook = mod.RouterHook()
+        hook.register_proxy_routes(app, lambda: current_auth[0])
+        return hook, app, current_auth
 
     return build
 
@@ -251,3 +252,99 @@ async def test_history_outage_does_not_change_live_enforcement_or_report_empty_s
         TestClient(app).get("/securelitellm/decisions", params={"session": "a" * 16}).status_code
         == 503
     )
+
+
+def test_admin_memory_reads_apply_the_same_cap_across_owners():
+    store = DecisionStore(session_limit=3)
+    for n in range(6):
+        store.append([record(decision_id=f"{n:032x}")], f"owner-{n // 3}")
+    assert [r["decision_id"] for r in store.read("a" * 16)] == [f"{n:032x}" for n in range(3, 6)]
+
+
+@pytest.mark.asyncio
+async def test_offline_hooks_do_not_import_proxy_or_replace_live_history(build_hook, monkeypatch):
+    from router import hook as mod
+    from router.session import session_ref
+
+    hook, app, caller = build_hook()
+    request = data()
+    await pre(hook, request)
+    headers = await hook.async_post_call_response_headers_hook(request, auth(), {})
+    monkeypatch.setattr(mod, "_proxy_app_and_auth", lambda: pytest.fail("offline proxy import"))
+    offline = mod.RouterHook()
+    assert mod._DECISION_ROUTE_HOOKS[app] is hook
+    with pytest.raises(RuntimeError, match="already bound"):
+        offline.register_proxy_routes(app, lambda: auth())
+    caller[0] = auth(role="proxy_admin")
+    retained = TestClient(app).get(
+        "/securelitellm/decisions", params={"session": session_ref(headers["x-agent-run-id"])}
+    )
+    assert len(retained.json()["decisions"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_failure_cleanup_preserves_error_headers_without_evicting_inflight_requests(
+    build_hook, monkeypatch
+):
+    from litellm.exceptions import BadRequestError
+
+    from router import hook as mod
+
+    hook, _, _ = build_hook([{"id": "deny", "when": {"sink_requested": False}, "score": 1}])
+    monkeypatch.setattr(mod, "_ISSUED_CACHE_MAX", 4)
+    inflight = data("still-running")
+    capture = hook._capture(inflight, auth(), create=True)
+    for n in range(12):
+        request = data(f"failed-{n}")
+        with pytest.raises(BadRequestError) as caught:
+            await pre(hook, request)
+        await hook.async_post_call_failure_hook(request, caught.value, auth())
+        assert len(hook._decision_captures) == 1
+        assert hook._capture(inflight, auth()) is capture
+    expected = caught.value.provider_specific_fields["securelitellm_decision"]
+    assert hook._failed_decision(request, auth("another-owner")) is None
+    headers = await hook.async_post_call_response_headers_hook(request, auth(), None)
+    assert json.loads(headers[DECISION_HEADER]) == expected
+    assert "securelitellm_failed_decision" not in request["metadata"]
+    forged = data(
+        metadata={"securelitellm_failed_decision": {"value": expected, "signature": "fake"}}
+    )
+    assert hook._failed_decision(forged, auth()) is None
+
+
+@pytest.mark.asyncio
+async def test_classifier_unavailable_record_contains_required_audit_fields(build_hook):
+    from dataclasses import replace
+
+    from litellm.exceptions import BadRequestError
+
+    hook, _, _ = build_hook()
+    first = data()
+    await pre(hook, first)
+    headers = await hook.async_post_call_response_headers_hook(first, auth(), {})
+    hook._controls = replace(hook._controls, classifier=True)
+    request = data(
+        "classifier-failure",
+        metadata={"headers": {"x-agent-run-id": headers["x-agent-run-id"]}},
+        messages=[
+            {"role": "user", "content": "Read the file"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "read-1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "read-1", "content": "untrusted file content"},
+        ],
+    )
+    with pytest.raises(BadRequestError, match="classifier is required"):
+        await pre(hook, request)
+    audit = json.loads(Path(hook.config.log_path).read_text().splitlines()[-1])
+    schema = json.loads(Path("router/schemas/decision_record.json").read_text())
+    assert set(schema["required"]) <= audit.keys()
+    assert audit["risk_score"] == 1.0 and audit["latency_ms"] >= 0
+    assert audit["controls"] == hook._controls.summary()

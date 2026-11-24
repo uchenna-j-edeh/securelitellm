@@ -237,7 +237,9 @@ def make_hook(monkeypatch, log_path):
         dependency = auth if auth is not None else (lambda: None)
         monkeypatch.setattr(hook_mod, "_proxy_app_and_auth", lambda: (target, dependency))
         monkeypatch.setattr(hook_mod, "_APPROVAL_ROUTE_HOOKS", {})
-        return hook_mod.RouterHook()
+        hook = hook_mod.RouterHook()
+        hook.register_proxy_routes(target, dependency)
+        return hook
 
     return make
 
