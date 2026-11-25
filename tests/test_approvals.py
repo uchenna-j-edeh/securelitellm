@@ -237,7 +237,9 @@ def make_hook(monkeypatch, log_path):
         dependency = auth if auth is not None else (lambda: None)
         monkeypatch.setattr(hook_mod, "_proxy_app_and_auth", lambda: (target, dependency))
         monkeypatch.setattr(hook_mod, "_APPROVAL_ROUTE_HOOKS", {})
-        return hook_mod.RouterHook()
+        hook = hook_mod.RouterHook()
+        hook.register_proxy_routes(target, dependency)
+        return hook
 
     return make
 
@@ -541,6 +543,7 @@ def test_startup_reports_the_approval_ttl_and_registers_the_admin_routes(make_ho
     assert startup["approval_ttl_seconds"] == 600
     assert startup["controls"]["approvals"] == "on"
     assert app.routes == [
+        ("/securelitellm/decisions", ["GET"]),
         ("/securelitellm/approvals", ["GET"]),
         ("/securelitellm/approvals/{approval_ref}/approve", ["POST"]),
         ("/securelitellm/approvals/{approval_ref}/deny", ["POST"]),

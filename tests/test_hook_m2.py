@@ -537,7 +537,9 @@ async def test_issued_id_is_accepted_on_later_requests(hook_enforcing, log_path)
     record = read_record(log_path, n=1)
     assert record["session_id"] == session_ref(raw)
     assert record["session_issued"] is False
-    assert await _headers(hook_enforcing, later) is None
+    later_headers = await _headers(hook_enforcing, later)
+    assert "x-agent-run-id" not in later_headers
+    assert "x-securelitellm-decision" in later_headers
 
 
 @pytest.mark.asyncio

@@ -617,6 +617,10 @@ def _hook(monkeypatch, log_path, store, *, enforce="true", workers=None, control
     if controls:
         monkeypatch.setenv("ROUTER_CONTROLS", controls)
     monkeypatch.setattr(sess_mod, "_store", store)
+    # This double exercises session failures, not a real Postgres connection.
+    from router.decisions import DecisionStore
+
+    monkeypatch.setattr(hook_mod, "history_store", lambda _: DecisionStore())
     monkeypatch.setattr(hook_mod, "_proxy_app_and_auth", lambda: (MagicMock(), lambda: None))
     monkeypatch.setattr(hook_mod, "_APPROVAL_ROUTE_HOOKS", {})
     return hook_mod.RouterHook()

@@ -109,9 +109,11 @@ from router.session import (
     store_ttls_from_env,
 )
 
-SCHEMA_VERSION = 2  # 2 adds the approvals table (router.pg_approvals)
+SCHEMA_VERSION = 3  # 3 adds bounded decision history (#250)
+SESSION_MAC_VERSION = 2  # Session payload is unchanged by the additive history migration.
 TABLE = "securelitellm_sessions"
 APPROVALS_TABLE = "securelitellm_approvals"
+DECISIONS_TABLE = "securelitellm_decisions"
 META_TABLE = "securelitellm_schema"
 MAX_SINKS = 200  # per session; the oldest is dropped
 SINK_FIELDS = ("id", "name", "category", "args_length", "inventory")
@@ -126,6 +128,20 @@ TLS_MODES = ("require", "verify-ca", "verify-full")
 Clock = Callable[[], float]
 
 SCHEMA_STATEMENTS = (
+    f"""
+    CREATE TABLE IF NOT EXISTS {DECISIONS_TABLE} (
+        decision_id text PRIMARY KEY,
+        session_ref text,
+        owner text NOT NULL,
+        created_at double precision NOT NULL,
+        expires_at double precision NOT NULL,
+        record jsonb NOT NULL,
+        mac text NOT NULL
+    )
+    """,
+    f"CREATE INDEX IF NOT EXISTS {DECISIONS_TABLE}_session_idx "
+    f"ON {DECISIONS_TABLE} (session_ref, owner, created_at DESC)",
+    f"CREATE INDEX IF NOT EXISTS {DECISIONS_TABLE}_expiry_idx ON {DECISIONS_TABLE} (expires_at)",
     f"""
     CREATE TABLE IF NOT EXISTS {TABLE} (
         session_key      text PRIMARY KEY,
@@ -712,7 +728,7 @@ class PostgresSessionStore(BaseSessionStore):
     ) -> str:
         material = json.dumps(
             [
-                SCHEMA_VERSION,
+                SESSION_MAC_VERSION,
                 key,
                 owner,
                 repr(float(created_at)),
@@ -808,7 +824,7 @@ def migrate(conninfo: str, grant_to: str | None = None, role_password: str | Non
             conn.execute(f"UPDATE {META_TABLE} SET version = %s", (SCHEMA_VERSION,))
         if grant_to:
             role = sql.Identifier(grant_to)
-            for table in (TABLE, APPROVALS_TABLE):
+            for table in (TABLE, APPROVALS_TABLE, DECISIONS_TABLE):
                 conn.execute(
                     sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON {} TO {}").format(
                         sql.Identifier(table), role

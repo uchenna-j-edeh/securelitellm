@@ -11,15 +11,16 @@
       --accent:#6366f1; --green:#22c55e; --amber:#f59e0b;
       --red:#ef4444; --blue:#60a5fa; --cyan:#22d3ee;
     }
+    [hidden]{display:none!important;}
     *{box-sizing:border-box;margin:0;padding:0;}
     body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
          height:100vh;display:flex;flex-direction:column;overflow:hidden;}
 
     /* ── Header ── */
     header{padding:12px 20px;border-bottom:1px solid var(--border);
-           display:flex;align-items:center;gap:12px;flex-shrink:0;}
+           display:flex;align-items:center;gap:12px;flex-shrink:0;flex-wrap:wrap;}
     header h1{font-size:1rem;font-weight:700;letter-spacing:-.01em;}
-    .pill{font-size:.7rem;padding:2px 9px;border-radius:12px;font-weight:600;}
+    .pill{white-space:nowrap;font-size:.7rem;padding:2px 9px;border-radius:12px;font-weight:600;}
     .pill-indigo{background:#312e81;color:#a5b4fc;}
     .pill-green{background:#14532d;color:#86efac;}
     .pill-red{background:#450a0a;color:#fca5a5;}
@@ -28,8 +29,8 @@
     .dot{width:7px;height:7px;border-radius:50%;background:var(--green);}
 
     /* mode switch */
-    .mode-switch{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
-    .mode-btn{padding:4px 11px;background:var(--surface);color:var(--muted);border:none;
+    .mode-switch{flex-shrink:0;display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+    .mode-btn{white-space:nowrap;padding:4px 11px;background:var(--surface);color:var(--muted);border:none;
               font-size:.72rem;font-weight:600;font-family:monospace;cursor:pointer;transition:all .15s;}
     .mode-btn:hover{color:var(--text);}
     .mode-btn.active{background:var(--accent);color:#fff;}
@@ -119,7 +120,7 @@
     button.send:disabled{opacity:.4;cursor:not-allowed;}
 
     /* ── Right: decision log ── */
-    .log-panel{width:380px;display:flex;flex-direction:column;flex-shrink:0;}
+    .log-panel{width:450px;max-width:44vw;display:flex;flex-direction:column;flex-shrink:0;}
     .log-header{padding:12px 16px;border-bottom:1px solid var(--border);
                 font-size:.8rem;font-weight:600;display:flex;align-items:center;justify-content:space-between;}
     .log-entries{flex:1;overflow-y:auto;padding:10px;}
@@ -133,6 +134,29 @@
     .dc-phase{font-size:.68rem;color:var(--muted);}
     .dc-body{padding:7px 12px;font-family:monospace;font-size:.7rem;color:var(--muted);
              white-space:pre-wrap;}
+    .decision-status{padding:10px 16px;border-bottom:1px solid var(--border);font-size:.75rem;line-height:1.5;color:var(--muted);}
+    .decision-status[data-status="error"]{color:#fca5a5;}
+    .decision-status[data-status="recorded"]{color:#c4b5fd;background:#1e1b4b55;}
+    .decision-toolbar{display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);}
+    .decision-toolbar button,.decision-toolbar select{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px 9px;border-radius:6px;font:inherit;font-size:.72rem;cursor:pointer;}
+    .decision-toolbar select{min-width:0;max-width:100%;}
+    .decision-toolbar button:disabled,.mode-btn:disabled{opacity:.45;cursor:not-allowed;}
+    .decision-summary{padding:12px 16px;border-bottom:1px solid var(--border);background:#151827;}
+    .decision-summary[data-action="strip-tools"],.decision-summary[data-action="hold"]{border-left:4px solid var(--amber);}
+    .decision-summary[data-action="block"]{border-left:4px solid var(--red);}
+    .decision-summary[data-action="allow"]{border-left:4px solid var(--green);}
+    .decision-summary h2{font-size:.75rem;font-weight:500;color:var(--muted);margin-bottom:9px;}
+    .decision-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px;}
+    .decision-grid dt{color:var(--muted);font-size:.68rem;margin-bottom:3px;}
+    .decision-grid dd{font-size:1rem;font-weight:600;overflow-wrap:anywhere;}
+    .decision-explanation{font-size:.76rem;line-height:1.55;margin-top:12px;}
+    .decision-identity{font-size:.66rem;color:var(--muted);margin-top:8px;overflow-wrap:anywhere;}
+    .dc .decision-grid{padding:10px 12px;gap:8px;}
+    .dc .decision-grid dd{font-size:.82rem;}
+    .dc details{padding:8px 12px;border-top:1px solid var(--border);font-size:.7rem;color:var(--muted);}
+    .dc details pre{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:7px;}
+    .dc summary{cursor:pointer;}
+    @media(max-width:800px){header{flex-wrap:wrap;}.main{flex-direction:column;overflow:auto;}.chat-panel{min-height:55vh;flex-shrink:0;}.log-panel{width:100%;max-width:none;min-height:45vh;}.log-entries{max-height:45vh;}}
     .ab{padding:2px 9px;border-radius:10px;font-size:.68rem;font-weight:700;}
     .ab-allow{background:#14532d;color:#86efac;}
     .ab-block{background:#450a0a;color:#fca5a5;}
@@ -238,6 +262,7 @@
       </div>
     </div>
 
+    <div id="work-beat-status" role="status" hidden style="padding:8px 16px;color:var(--amber)"></div>
     <div class="input-row">
       <textarea id="input" placeholder="Ask the agent to browse a URL…" rows="1"
         onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
@@ -248,9 +273,29 @@
   <!-- DECISION LOG -->
   <div class="log-panel">
     <div class="log-header">
-      <span>Decision Log</span>
+      <span>Gateway decisions</span>
       <span id="decision-count" style="color:var(--muted);font-size:.72rem;">0 decisions</span>
     </div>
+    <div class="decision-status" id="decision-status" role="status" aria-live="polite">Live decisions · waiting for a request.</div>
+    <div class="decision-toolbar">
+      <button id="decision-refresh" type="button">Restore history</button>
+      <button id="decision-import" type="button">Load recorded log</button>
+      <input id="decision-file" type="file" accept=".json,.jsonl,application/json" hidden>
+    </div>
+    <div class="decision-toolbar" id="recorded-session-row" hidden>
+      <select id="recorded-session" aria-label="Recorded session"></select>
+    </div>
+    <section id="decision-summary" class="decision-summary" aria-label="Latest gateway decision">
+      <h2>Latest gateway decision</h2>
+      <dl class="decision-grid">
+        <div><dt title="Policy score, not a probability of attack">Risk score</dt><dd id="latest-risk-score">—</dd></div>
+        <div><dt>Risk level</dt><dd id="latest-risk-level">—</dd></div>
+        <div><dt>Route</dt><dd id="latest-route">—</dd></div>
+        <div><dt>Action</dt><dd id="latest-action">—</dd></div>
+      </dl>
+      <p class="decision-explanation" id="decision-explanation">Run a task to see the gateway's decision alongside the agent's work.</p>
+      <p class="decision-identity" id="decision-identity"></p>
+    </section>
     <div class="log-entries" id="log-entries">
       <div class="log-empty">SecureLiteLLM decisions appear here in real time.</div>
     </div>
@@ -268,41 +313,92 @@
 
 </div>
 
+<script src="/static/decisions.js"></script>
+<script src="/static/session.js"></script>
 <script>
+  const decisionPanel = new DecisionPanel();
   // Session state
-  let SESSION_ID = 'demo-' + Math.random().toString(36).slice(2, 10);
-  let MODE = 'session';
+  let SESSION_ID = sessionStorage.getItem('securelitellm-ui-session') || newUiSessionId();
+  let MODE = sessionStorage.getItem('securelitellm-ui-mode') || 'session';
+  sessionStorage.setItem('securelitellm-ui-session', SESSION_ID);
   let running = false;
-  let stats = {allow:0, harden:0, strip:0, block:0};
-  let decisionCount = 0;
+  let restoring = true;
+  document.getElementById('send-btn').disabled = true;
   let outboxCount = 0;
   let DEMO_RECIPIENT = 'demo-recipient@example.test';
 
-  fetch('/config').then(r => r.json()).then(cfg => {
+  fetch('/config').then(r => r.json()).then(async cfg => {
     document.getElementById('agent-pill').textContent = cfg.agent;
     document.getElementById('model-pill').textContent = 'Requested model: ' + cfg.model_display;
     DEMO_RECIPIENT = cfg.demo_recipient || DEMO_RECIPIENT;
+    decisionPanel.source = 'proxy response';
+    if (!(cfg.available_modes || ['session', 'stateless']).includes(MODE)) {
+      MODE = 'session';
+      newSession();
+    }
+    sessionStorage.setItem('securelitellm-ui-mode', MODE);
+    document.getElementById('mode-session').classList.toggle('active', MODE === 'session');
+    document.getElementById('mode-stateless').classList.toggle('active', MODE === 'stateless');
+    document.getElementById('mode-label').textContent = MODE + '/L3';
+    if (!(cfg.available_modes || ['session', 'stateless']).includes('stateless')) {
+      const stateless = document.getElementById('mode-stateless');
+      stateless.disabled = true;
+      stateless.title = 'This remote deployment provides Session memory only.';
+    }
     for (const beat of cfg.work_beats || []) {
       const button = document.createElement('button');
       button.className = 'qt' + (beat.attack ? ' attack' : '');
       button.textContent = (beat.attack ? '⚠ ' : '') + beat.label;
-      button.disabled = !beat.configured;
       button.title = beat.configured
-        ? 'Start a fresh session, then use this prompt. The live model may refuse an attack.'
-        : 'Configure this demo service and run the connection check to enable it.';
-      button.addEventListener('click', () => fillInput(beat.prompt));
+        ? 'Fill the prompt below. Start a fresh session before running a separate demo.'
+        : 'Fill the prompt below. This service needs configuration before it can run.';
+      button.addEventListener('click', () => {
+        fillInput(beat.prompt);
+        const status = document.getElementById('work-beat-status');
+        status.textContent = beat.configured ? '' : `${beat.channel} connection needs configuration before running this prompt.`;
+        status.hidden = beat.configured;
+      });
       document.getElementById('work-beats').appendChild(button);
     }
     document.getElementById('classifier-pill').title =
       `Tool service: ${cfg.tool_service} · Email mode: ${cfg.email_mode}`;
-  }).catch(() => {});
+    await restoreUiSession();
+    decisionPanel.restore(SESSION_ID, MODE);
+  }).catch(() => {
+    newSession();
+    appendBanner('intercepted', 'Started a new session', 'Previous context could not be restored.');
+  }).finally(() => {
+    restoring = false;
+    document.getElementById('send-btn').disabled = false;
+  });
+
+  async function restoreUiSession() {
+    const handle = SESSION_ID;
+    const response = await fetch('/session/' + encodeURIComponent(handle));
+    if (!response.ok) throw new Error('Session restore unavailable');
+    const snapshot = await response.json();
+    if (handle !== SESSION_ID) return;
+    if (!snapshot.exists || snapshot.mode !== MODE) {
+      newSession();
+      return;
+    }
+    clearWelcome();
+    appendBanner('intercepted', 'Existing session restored',
+      'Earlier conversation and gateway context are still active. Use New Session to start clean.');
+    for (const event of snapshot.events || []) handleEvent(event, true);
+    if (snapshot.pending_approval) appendApprovalCard(MODE);
+  }
 
   function newSession() {
-    SESSION_ID = 'demo-' + Math.random().toString(36).slice(2, 10);
-    stats = {allow:0, harden:0, strip:0, block:0};
-    decisionCount = 0;
+    if (running) return;
+    decisionPanel.reset();
+    SESSION_ID = newUiSessionId();
+    sessionStorage.setItem('securelitellm-ui-session', SESSION_ID);
+    sessionStorage.setItem('securelitellm-ui-mode', MODE);
     outboxCount = 0;
     getMessages().innerHTML = '';
+    clearInterval(approvalTimer);
+    for (const id of Object.keys(_pendingArgs)) delete _pendingArgs[id];
     document.getElementById('log-entries').innerHTML =
       '<div class="log-empty">No decisions yet.</div>';
     document.getElementById('s-allow').textContent = 0;
@@ -329,6 +425,7 @@
 
   // ── Input helpers ──
   function fillInput(text) {
+    document.getElementById('work-beat-status').hidden = true;
     const el = document.getElementById('input');
     el.value = text;
     autoResize(el);
@@ -417,20 +514,17 @@
 
   function appendToolResult(name, result) {
     const m = getMessages();
-    let preview = '';
-    try {
-      if (typeof result === 'object') {
-        const content = result.content || result.result || JSON.stringify(result);
-        preview = String(content).slice(0, 300);
-        if (String(content).length > 300) preview += '…';
-      } else {
-        preview = String(result).slice(0, 300);
-      }
-    } catch { preview = JSON.stringify(result).slice(0, 300); }
+    let content;
+    if (result && typeof result === 'object') {
+      content = result.content ?? result.result ?? JSON.stringify(result, null, 2);
+    } else content = String(result);
+    if (typeof content !== 'string') content = JSON.stringify(content, null, 2);
+    const preview = content.slice(0, 300) + (content.length > 300 ? '…' : '');
     const div = document.createElement('div');
     div.className = 'tool-row result';
     div.innerHTML = `<span class="tool-icon">📄</span>
-      <div class="tool-body"><div class="tool-label">Result — ${esc(name)}</div>${esc(preview)}</div>`;
+      <div class="tool-body"><div class="tool-label">Result — ${esc(name)}</div>${esc(preview)}
+      ${content.length > 300 ? `<details><summary>Show full tool result</summary><pre style="white-space:pre-wrap">${esc(content)}</pre></details>` : ''}</div>`;
     m.appendChild(div);
     scrollChat();
   }
@@ -526,52 +620,12 @@
 
   // ── Decision log ──
   function addDecision(rec) {
-    const log = document.getElementById('log-entries');
-    const empty = log.querySelector('.log-empty');
-    if (empty) empty.remove();
-
-    const action = rec.action || 'allow';
-    const phase = rec.phase || '';
-    const f = rec.features || {};
-    const risk = (rec.risk_score || 0).toFixed(3);
-    const rules = (rec.matched_rules || []).join(', ') || '—';
-    const verdicts = f.classifier_verdicts || [];
-
-    const cls = action.replace(/-/g,'');
-    const card = document.createElement('div');
-    card.className = 'dc';
-
-    let clfHtml = '';
-    verdicts.forEach(v => {
-      const cls2 = v.label === 'INJECTION' ? 'clf-injection' : 'clf-benign';
-      clfHtml += `<span class="clf-badge ${cls2}">${v.label} ${(v.score*100).toFixed(0)}%</span>`;
-    });
-
-    card.innerHTML = `
-      <div class="dc-head">
-        <span class="dc-phase">${phase}${rec.risk_level ? ' · risk ' + esc(rec.risk_level) : ''}</span>
-        <span>${rec.route ? routeBadge(rec.route) + ' ' : ''}<span class="ab ab-${cls}">${action}</span></span>
-      </div>
-      <div class="dc-body">${rec.agent ? `agent=${esc(rec.agent)}\n` : ''}risk=${risk}  rules=[${rules}]
-untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink_args !== undefined ? `\ntainted_hash=${f.tainted_spans_in_sink_args}` : ''}${rec.data_class ? `\ndata_class=${esc(rec.data_class)}${(rec.data_class_rules || []).length ? '  [' + esc(rec.data_class_rules.join(', ')) + ']' : ''}${f.session_sensitive ? '  (session)' : ''}` : ''}${clfHtml ? `\n${clfHtml}` : ''}</div>`;
-    log.prepend(card);
-
-    decisionCount++;
-    document.getElementById('decision-count').textContent = decisionCount + ' decision' + (decisionCount !== 1 ? 's' : '');
-
-    if (action === 'block') stats.block++;
-    else if (action === 'strip-tools') stats.strip++;
-    else if (action === 'route-hardened' || action === 'hold') stats.harden++;
-    else stats.allow++;
-    document.getElementById('s-allow').textContent = stats.allow;
-    document.getElementById('s-harden').textContent = stats.harden;
-    document.getElementById('s-strip').textContent = stats.strip;
-    document.getElementById('s-block').textContent = stats.block;
+    if (!decisionPanel.recorded) decisionPanel.add(rec);
   }
 
   // ── Send ──
   async function sendMessage() {
-    if (running) return;
+    if (running || restoring) return;
     const input = document.getElementById('input');
     const msg = input.value.trim();
     if (!msg) return;
@@ -582,17 +636,24 @@ untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink
     document.getElementById('send-btn').disabled = true;
 
     appendUserMsg(msg);
+    decisionPanel.begin(SESSION_ID, MODE);
 
-    const resp = await fetch('/chat', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({message: msg, session_id: SESSION_ID, mode: MODE}),
-    });
-    await readEvents(resp);
-
-    running = false;
-    document.getElementById('send-btn').disabled = false;
-    input.focus();
+    try {
+      const resp = await fetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({message: msg, session_id: SESSION_ID, mode: MODE}),
+      });
+      if (!resp.ok) throw new Error('Chat service returned HTTP ' + resp.status);
+      await readEvents(resp);
+    } catch (error) {
+      appendBanner('blocked', 'Connection error', error.message);
+    } finally {
+      decisionPanel.finish();
+      running = false;
+      document.getElementById('send-btn').disabled = false;
+      input.focus();
+    }
   }
 
   // Server-sent events from /chat or /chat/resume.
@@ -669,7 +730,7 @@ untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink
   }
 
   async function decideApproval(card, ref, decision, mode) {
-    if (running) return;
+    if (running || restoring) return;
     card.querySelectorAll('button').forEach(b => b.disabled = true);
     clearInterval(approvalTimer);
     const r = await fetch(`/approvals/${encodeURIComponent(ref)}/${decision}?mode=${mode}`, {method: 'POST'});
@@ -684,21 +745,32 @@ untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink
       : 'Denied — the agent is told not to retry.';
     // Either way the agent retries: it gets the held calls, or the denial.
     running = true;
+    decisionPanel.begin(SESSION_ID, MODE);
     document.getElementById('send-btn').disabled = true;
-    const resp = await fetch('/chat/resume', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({session_id: SESSION_ID}),
-    });
-    await readEvents(resp);
-    running = false;
-    document.getElementById('send-btn').disabled = false;
+    try {
+      const resp = await fetch('/chat/resume', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({session_id: SESSION_ID}),
+      });
+      if (!resp.ok) throw new Error('Chat service returned HTTP ' + resp.status);
+      await readEvents(resp);
+    } catch (error) {
+      appendBanner('blocked', 'Connection error', error.message);
+    } finally {
+      decisionPanel.finish();
+      running = false;
+      document.getElementById('send-btn').disabled = false;
+    }
   }
 
   const _pendingArgs = {};
 
-  function handleEvent(ev) {
+  function handleEvent(ev, replaying = false) {
     switch (ev.kind) {
+      case 'user_message':
+        appendUserMsg(ev.content);
+        break;
       case 'assistant_tool_calls':
         break; // individual calls follow
       case 'tool_call':
@@ -724,13 +796,16 @@ untrusted=${f.untrusted_seen}  sink=${f.sink_requested}${f.tainted_spans_in_sink
         appendBanner('intercepted', '⚠️ Tool calls intercepted — ' + ev.action, ev.message || '');
         break;
       case 'approval_pending':
-        appendApprovalCard(ev.mode || MODE);
+        if (!replaying) appendApprovalCard(ev.mode || MODE);
         break;
       case 'approval_status':
         appendBanner('intercepted', '⏳ Approval ' + ev.status, ev.message || '');
         break;
       case 'error':
         appendBanner('blocked', 'Error', ev.message || 'Unknown error');
+        break;
+      case 'decision_status':
+        if (!decisionPanel.recorded) decisionPanel.status(ev.status, ev.message);
         break;
       case 'decision':
         addDecision(ev.record);

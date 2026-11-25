@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from demo.agent import MODEL, resume_chat, run_chat  # noqa: E402
 from demo.tools import TOOL_SERVER_URL  # noqa: E402
 from demo.work_beats import work_beats  # noqa: E402
+from router.decisions import DECISIONS_PATH  # noqa: E402
 from router.session import session_ref  # noqa: E402
 
 DEMO_DIR = Path(__file__).parent
@@ -42,18 +43,13 @@ MASTER_KEY = os.environ.get("DEMO_AGENT_KEY") or os.environ.get("LITELLM_MASTER_
 # a proxy_admin user, lets a participant approve without the master key.
 ADMIN_KEY = os.environ.get("DEMO_APPROVER_KEY") or os.environ.get("LITELLM_MASTER_KEY", "")
 APPROVALS_PATH = "/securelitellm/approvals"
-CONTAINER_NAME = os.environ.get("E2E_CONTAINER_NAME", "deploy-litellm-1")
 
 # Dual-proxy wiring for the live A/B delayed-exfil demo. Each mode points at a
-# separate proxy container running a different ROUTER_MODE; the decision log is
-# read from whichever container served the turn.
+# separate proxy running a different ROUTER_MODE. Decisions arrive with each
+# response, including on remote deployments with no local Docker or AWS login.
 PROXY_BY_MODE = {
     "session": os.environ.get("PROXY_URL_SESSION", "http://localhost:4000"),
     "stateless": os.environ.get("PROXY_URL_STATELESS", "http://localhost:4001"),
-}
-CONTAINER_BY_MODE = {
-    "session": os.environ.get("CONTAINER_SESSION", CONTAINER_NAME),
-    "stateless": os.environ.get("CONTAINER_STATELESS", "deploy-litellm-stateless-1"),
 }
 
 app = FastAPI(title="SecureLiteLLM Demo")
@@ -63,6 +59,14 @@ app.mount("/static", StaticFiles(directory=str(DEMO_DIR / "static")), name="stat
 #   {"proxy_id": raw proxy-issued x-agent-run-id or None, "history": [messages]}
 # The raw proxy id is a session secret: it stays here and never reaches the browser.
 _sessions: dict[str, dict] = {}
+TRANSCRIPT_EVENTS = 500
+
+
+def _remember_event(ui: dict, event: dict) -> None:
+    # Only the same public, sanitized events already sent to this browser.
+    events = ui.setdefault("events", [])
+    events.append(event)
+    del events[:-TRANSCRIPT_EVENTS]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -89,6 +93,10 @@ async def demo_config() -> dict:
         "email_mode": os.environ.get("DEMO_EMAIL_MODE", "log"),
         "demo_recipient": os.environ.get("DEMO_RECIPIENT", "demo-recipient@example.test"),
         "work_beats": work_beats(),
+        "decision_source": "proxy response",
+        "available_modes": ["session"]
+        if os.environ.get("DEMO_REMOTE") == "1" and not os.environ.get("PROXY_URL_STATELESS")
+        else ["session", "stateless"],
     }
 
 
@@ -101,7 +109,6 @@ async def chat(request: Request) -> StreamingResponse:
     if mode not in PROXY_BY_MODE:
         mode = "session"
     proxy_url = PROXY_BY_MODE[mode]
-    container = CONTAINER_BY_MODE[mode]
 
     if not user_message:
         return StreamingResponse(
@@ -110,6 +117,18 @@ async def chat(request: Request) -> StreamingResponse:
         )
 
     ui = _sessions.setdefault(session_id, {"proxy_id": None, "history": []})
+    if ui.get("mode", mode) != mode:
+        return StreamingResponse(
+            iter(
+                [
+                    f"data: {json.dumps({'kind': 'error', 'message': 'Start a new UI session before changing proxy mode.'})}\n\n",
+                    f"data: {json.dumps({'kind': 'stream_end'})}\n\n",
+                ]
+            ),
+            media_type="text/event-stream",
+        )
+    ui["mode"] = mode
+    _remember_event(ui, {"kind": "user_message", "content": user_message})
     events = run_chat(
         user_message=user_message,
         history=ui["history"],
@@ -118,7 +137,7 @@ async def chat(request: Request) -> StreamingResponse:
         proxy_url=proxy_url,
     )
     return StreamingResponse(
-        _stream_turn(ui, events, mode, container, session_id, user_message),
+        _stream_turn(ui, events, mode, session_id, user_message),
         media_type="text/event-stream",
     )
 
@@ -146,21 +165,34 @@ async def chat_resume(request: Request) -> StreamingResponse:
         pending, ui["proxy_id"], master_key=MASTER_KEY, proxy_url=PROXY_BY_MODE[mode]
     )
     return StreamingResponse(
-        _stream_turn(ui, events, mode, CONTAINER_BY_MODE[mode], session_id, None),
+        _stream_turn(ui, events, mode, session_id, None),
         media_type="text/event-stream",
     )
 
 
-def _stream_turn(ui: dict, events, mode: str, container: str, session_id: str, user_message):
-    """Relay the agent's events to the browser, then the session's decision records."""
+def _stream_turn(ui: dict, events, mode: str, session_id: str, user_message):
+    """Relay decisions from the exact response before its tools or error are shown."""
     assistant_content = None
-    was_blocked = False
     reset = False
+    received_decision = False
+    ui.setdefault("decisions", OrderedDict())
+    ui.setdefault("decision_refs", [])
+    ui.setdefault("mode", mode)
 
     for event in events:
         if event["kind"] == "proxy_session":
             ui["proxy_id"] = event["session_id"]
+            ref = session_ref(ui["proxy_id"])
+            if ref not in ui["decision_refs"]:
+                ui["decision_refs"] = [*ui["decision_refs"], ref][-4:]
             event = {"kind": "proxy_session", "session_ref": event["session_ref"]}
+        if event["kind"] == "decision":
+            received_decision = True
+            record = {**event["record"], "received_at": datetime.now(timezone.utc).isoformat()}
+            ui["decisions"][record["decision_id"]] = record
+            while len(ui["decisions"]) > 300:
+                ui["decisions"].popitem(last=False)
+            event = {**event, "record": record}
         if event["kind"] == "approval_pending":
             # The approval ID and the held turn stay here; the browser gets neither.
             ui["pending_approval"] = {
@@ -173,26 +205,17 @@ def _stream_turn(ui: dict, events, mode: str, container: str, session_id: str, u
                 "session_ref": event["session_ref"],
                 "mode": mode,
             }
+        if event["kind"] not in {"decision", "decision_status", "assistant_tool_calls"}:
+            _remember_event(ui, event)
         yield f"data: {json.dumps(event)}\n\n"
 
         if event["kind"] == "assistant_message":
             assistant_content = event["content"]
-        if event["kind"] == "blocked":
-            was_blocked = True
         if event["kind"] == "session_reset":
             reset = True
 
-    # Pull decision records for this session from container logs
-    time.sleep(0.5)
-    ref = session_ref(ui["proxy_id"]) if ui["proxy_id"] else None
-    decisions = _decisions_for_session(ref, container) if ref else []
-    for d in decisions:
-        yield f"data: {json.dumps({'kind': 'decision', 'record': d})}\n\n"
-
-    # Enrich the blocked banner with the last decision's context
-    if was_blocked and decisions:
-        last = decisions[-1]
-        yield f"data: {json.dumps({'kind': 'block_context', 'record': last})}\n\n"
+    if not received_decision:
+        yield f"data: {json.dumps({'kind': 'decision_status', 'status': 'unavailable', 'message': 'No structured decision received for this turn. The proxy may be unreachable or may need the decision response update.'})}\n\n"
 
     # The proxy rejected the session (expired, restarted, ...): start clean.
     if reset:
@@ -258,6 +281,20 @@ async def clear_session(session_id: str) -> dict:
     return {"status": "cleared"}
 
 
+@app.get("/session/{session_id}")
+def session_snapshot(session_id: str) -> dict:
+    """Restore visible context without exposing proxy credentials or held messages."""
+    ui = _sessions.get(session_id)
+    if ui is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "mode": ui.get("mode", "session"),
+        "events": ui.get("events", []),
+        "pending_approval": bool(ui.get("pending_approval")),
+    }
+
+
 @app.get("/outbox")
 async def outbox() -> dict:
     p = LOGS_DIR / "outbox.jsonl"
@@ -291,29 +328,37 @@ async def clear_logs() -> dict:
     return {"status": "cleared"}
 
 
-def _decisions_for_session(ref: str, container: str = CONTAINER_NAME) -> list[dict]:
-    """Decision records whose session_id (a session_ref) matches *ref*."""
-    try:
-        result = subprocess.run(
-            ["docker", "logs", "--tail", "200", container],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        records = []
-        for line in (result.stdout + result.stderr).splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
+@app.get("/decisions")
+def decisions(session_id: str = "", mode: str = "session") -> dict:
+    """Restore one server-owned UI session; never accept an arbitrary audit ref."""
+    ui = _sessions.get(session_id)
+    if not ui or ui.get("mode", mode) != mode or mode not in PROXY_BY_MODE:
+        return {
+            "source": "proxy response",
+            "status": "waiting",
+            "records": [],
+            "message": "No retained UI session. Start a new session.",
+        }
+    cached = ui.setdefault("decisions", OrderedDict())
+    message = "Restored decisions received by this UI session."
+    if ADMIN_KEY:
+        for ref in ui.get("decision_refs", []):
+            status, body = _admin_call(mode, "GET", DECISIONS_PATH + "?session=" + ref)
+            if status != 200:
+                message = "Showing received decisions; gateway history is unavailable."
                 continue
-            try:
-                d = json.loads(line)
-                if d.get("session_id") == ref and "features" in d:
-                    records.append(d)
-            except json.JSONDecodeError:
-                pass
-        return records
-    except Exception:
-        return []
+            for record in body.get("decisions", []):
+                if record.get("session_id") == ref and isinstance(record.get("decision_id"), str):
+                    identifier = record["decision_id"]
+                    cached[identifier] = {**cached.get(identifier, {}), **record}
+    while len(cached) > 300:
+        cached.popitem(last=False)
+    return {
+        "source": "proxy response",
+        "status": "ready" if cached else "waiting",
+        "records": list(cached.values()),
+        "message": message,
+    }
 
 
 if __name__ == "__main__":

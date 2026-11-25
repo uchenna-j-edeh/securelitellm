@@ -26,6 +26,9 @@ are rejected. Logs carry session_ref (a hash prefix), never the raw id.
 
 import asyncio
 import copy
+import hashlib
+import hmac
+import json
 import os
 import re
 import sys
@@ -35,6 +38,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -48,6 +52,16 @@ from router.approvals import ApprovalError, ApprovalStore, ttl_from_env
 from router.classifiers.base import BaseClassifier
 from router.config import RouterConfig
 from router.controls import resolve_controls
+from router.decisions import (
+    DECISION_HEADER,
+    DECISION_METADATA_KEY,
+    DECISIONS_PATH,
+    history_store,
+    response_value,
+)
+from router.decisions import (
+    summary as decision_summary,
+)
 from router.identity import Caller, caller_identity
 from router.inventory import Inventory
 from router.logger import DecisionLogger
@@ -372,10 +386,11 @@ class RouterHook(CustomLogger):
         self._approval_headers: OrderedDict[str, dict[str, str]] = OrderedDict()
         self._replays: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
         self._refusals: OrderedDict[str, str] = OrderedDict()
+        self._decision_captures: OrderedDict[str, dict] = OrderedDict()
+        self._decision_error_secret = uuid.uuid4().bytes
+        self._decision_history = history_store(get_store())
         if self._controls.approvals:
             self._approvals = _approval_store(ttl_from_env(dict(os.environ), get_store().idle_ttl))
-            app, auth = _proxy_app_and_auth()
-            register_approval_routes(app, auth, self)
         self.decision_logger.emit(
             {
                 **self.config.startup_record(),
@@ -391,6 +406,17 @@ class RouterHook(CustomLogger):
                 ),
             }
         )
+
+    def register_proxy_routes(self, app: Any = None, auth: Any = None) -> None:
+        """Explicit proxy wiring; offline hook construction never imports the server."""
+        if app is None:
+            app, auth = _proxy_app_and_auth()
+        bound = _DECISION_ROUTE_HOOKS.get(app)
+        if bound is not None and bound is not self:
+            raise RuntimeError("decision routes are already bound to another proxy hook")
+        register_decision_routes(app, auth, self)
+        if self._approvals is not None:
+            register_approval_routes(app, auth, self)
 
     def _issue_session(self, request_id: str, owner: str) -> _Session:
         raw = get_store().issue(owner)
@@ -455,7 +481,7 @@ class RouterHook(CustomLogger):
         try:
             return self._check_session(data, request_id, owner, messages, phase)
         except _SessionViolation as exc:
-            self.decision_logger.emit(
+            self._record_decision(
                 {
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "phase": phase,
@@ -470,7 +496,9 @@ class RouterHook(CustomLogger):
                     "action": "block",
                     "matched_rules": [f"session_{exc.reason}"],
                     "enforce": self.config.enforce,
-                }
+                },
+                data,
+                user_api_key_dict,
             )
             if not self.config.enforce:
                 return self._issue_session(request_id, owner)
@@ -482,7 +510,7 @@ class RouterHook(CustomLogger):
                 llm_provider="",
             ) from exc
 
-    def _require_agent(self, caller: Caller, data: dict, request_id: str) -> None:
+    def _require_agent(self, caller: Caller, data: dict, request_id: str, auth: Any) -> None:
         """Reject a model request that no agent key authenticated (#148).
 
         Only with ROUTER_REQUIRE_AGENT_KEY=true. The master key, or a virtual
@@ -492,7 +520,7 @@ class RouterHook(CustomLogger):
         violation = caller.violation
         if violation is None or not self.config.require_agent_key:
             return
-        self.decision_logger.emit(
+        self._record_decision(
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "phase": "pre_call",
@@ -507,7 +535,9 @@ class RouterHook(CustomLogger):
                 "action": "block",
                 "matched_rules": ["agent_unidentified"],
                 "enforce": self.config.enforce,
-            }
+            },
+            data,
+            auth,
         )
         if not self.config.enforce:
             return
@@ -590,6 +620,19 @@ class RouterHook(CustomLogger):
         post-call escalation.
         """
         headers: dict[str, str] = {}
+        capture = self._capture(data, user_api_key_dict)
+        if capture and capture["records"]:
+            await self._save_decisions(capture)
+            headers[DECISION_HEADER] = json.dumps(
+                self._decision_value(capture, user_api_key_dict),
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+        elif (value := self._failed_decision(data, user_api_key_dict)) is not None:
+            headers[DECISION_HEADER] = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+        metadata = data.get("metadata") or {}
+        metadata.pop("securelitellm_failed_decision", None)
+        self._decision_captures.pop(metadata.get(DECISION_METADATA_KEY, ""), None)
         raw = self._issued.pop(data.get("litellm_call_id") or "", None)
         if raw:
             headers[SESSION_HEADER] = raw
@@ -607,10 +650,131 @@ class RouterHook(CustomLogger):
         data: dict,
         call_type: str,
     ) -> dict:
+        metadata = data.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = data["metadata"] = {}
+        # A client cannot attach another request's decision or its capture token.
+        metadata.pop(DECISION_METADATA_KEY, None)
+        metadata.pop("securelitellm_failed_decision", None)
+        # The configured module callback can have been imported before proxy
+        # startup. Bind lazily in that case, never for an offline/eval hook.
+        proxy = sys.modules.get("litellm.proxy.proxy_server")
+        if (
+            self is globals().get("proxy_handler_instance")
+            and getattr(proxy, "app", None) is not None
+        ):
+            self.register_proxy_routes()
+        self._capture(data, user_api_key_dict, create=True)
         try:
             return await self._pre_call(user_api_key_dict, cache, data, call_type)
         except SessionStoreUnavailable as exc:
-            raise self._store_outage(exc, "pre_call", data, user_api_key_dict) from exc
+            error = self._store_outage(exc, "pre_call", data, user_api_key_dict)
+            self._attach_decision_error(error, data, user_api_key_dict)
+            raise error from exc
+        except Exception as exc:
+            self._attach_decision_error(exc, data, user_api_key_dict)
+            raise
+
+    def _capture(self, data: dict, auth: Any, *, create: bool = False) -> dict | None:
+        metadata = data.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            if not create:
+                return None
+            metadata = data["metadata"] = {}
+        token = metadata.get(DECISION_METADATA_KEY)
+        capture = self._decision_captures.get(token) if isinstance(token, str) else None
+        owner = _api_key_owner(auth)
+        if capture is not None and capture["owner"] == owner:
+            return capture
+        if not create:
+            return None
+        token = uuid.uuid4().hex
+        metadata[DECISION_METADATA_KEY] = token
+        capture = {"owner": owner, "records": [], "saved": False, "history_available": True}
+        _remember(self._decision_captures, token, capture)
+        return capture
+
+    def _record_decision(self, record: dict, data: dict, auth: Any) -> None:
+        record["decision_id"] = uuid.uuid4().hex
+        self.decision_logger.emit(record)
+        capture = self._capture(data, auth, create=True)
+        capture["records"].append(decision_summary(record))
+
+    def _detailed_decisions(self, auth: Any) -> bool:
+        return self.config.expose_decisions or _role(auth) in _VIEWING_ROLES
+
+    def _decision_value(self, capture: dict, auth: Any) -> dict:
+        return response_value(
+            capture["records"], self._detailed_decisions(auth), capture["history_available"]
+        )
+
+    async def _save_decisions(self, capture: dict) -> None:
+        if capture["saved"]:
+            return
+        capture["saved"] = True
+        try:
+            # Database work never freezes the ASGI event loop. No AWS CLI or
+            # remote log read participates in returning the current decision.
+            await asyncio.to_thread(
+                self._decision_history.append, capture["records"], capture["owner"]
+            )
+        except SessionStoreUnavailable:
+            capture["history_available"] = False
+            self.decision_logger.emit({"event": "decision_history_unavailable"})
+
+    def _attach_decision_error(self, exc: Exception, data: dict, auth: Any) -> None:
+        capture = self._capture(data, auth)
+        if not capture or not capture["records"]:
+            return
+        # LiteLLM serializes this field into error.provider_specific_fields.
+        # It survives errors where there is no normal model response.
+        fields = getattr(exc, "provider_specific_fields", None)
+        exc.provider_specific_fields = {  # type: ignore[attr-defined]
+            **(fields if isinstance(fields, dict) else {}),
+            "securelitellm_decision": self._decision_value(capture, auth),
+        }
+        if not self._detailed_decisions(auth) and "Request blocked by policy" in str(exc):
+            exc.message = "SecureLiteLLM: Request blocked by policy"  # type: ignore[attr-defined]
+            exc.args = (exc.message,)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: Any,
+        traceback_str: str | None = None,
+    ) -> None:
+        capture = self._capture(request_data, user_api_key_dict)
+        if capture and capture["records"]:
+            await self._save_decisions(capture)
+            self._attach_decision_error(original_exception, request_data, user_api_key_dict)
+            value = self._decision_value(capture, user_api_key_dict)
+            # Request-scoped, signed metadata survives LiteLLM versions which
+            # run the headers hook AFTER the failure hook. No global failure
+            # cache remains when that headers hook is never called.
+            metadata = request_data["metadata"]
+            metadata["securelitellm_failed_decision"] = {
+                "value": value,
+                "signature": self._failure_signature(value, user_api_key_dict),
+            }
+        metadata = request_data.get("metadata") or {}
+        self._decision_captures.pop(metadata.get(DECISION_METADATA_KEY, ""), None)
+
+    def _failure_signature(self, value: dict, auth: Any) -> str:
+        material = json.dumps([_api_key_owner(auth), value], sort_keys=True, separators=(",", ":"))
+        return hmac.new(self._decision_error_secret, material.encode(), hashlib.sha256).hexdigest()
+
+    def _failed_decision(self, data: dict, auth: Any) -> dict | None:
+        metadata = data.get("metadata") or {}
+        envelope = metadata.get("securelitellm_failed_decision")
+        if not isinstance(envelope, dict) or not isinstance(envelope.get("value"), dict):
+            return None
+        signature = envelope.get("signature")
+        if isinstance(signature, str) and hmac.compare_digest(
+            signature, self._failure_signature(envelope["value"], auth)
+        ):
+            return envelope["value"]
+        return None
 
     def _store_outage(
         self, exc: SessionStoreUnavailable, phase: str, data: dict, user_api_key_dict: Any
@@ -621,7 +785,7 @@ class RouterHook(CustomLogger):
         store was needed: without it there is no session to judge the request
         against, and a fresh one would hand a tainted session a clean start.
         """
-        self.decision_logger.emit(
+        self._record_decision(
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "phase": phase,
@@ -636,7 +800,9 @@ class RouterHook(CustomLogger):
                 "action": "block",
                 "matched_rules": [f"session_{exc.reason}"],
                 "enforce": self.config.enforce,
-            }
+            },
+            data,
+            user_api_key_dict,
         )
         import litellm.exceptions as _le
 
@@ -663,7 +829,9 @@ class RouterHook(CustomLogger):
             data.pop(field, None)
         self._log_expired_approvals()
         caller = caller_identity(user_api_key_dict)
-        self._require_agent(caller, data, request_id)  # before a session is issued
+        self._require_agent(
+            caller, data, request_id, user_api_key_dict
+        )  # before a session is issued
         session = self._resolve_session(
             data, request_id, user_api_key_dict, messages, "pre_call", agent=caller.agent
         )
@@ -697,6 +865,28 @@ class RouterHook(CustomLogger):
         if untrusted_sources and self._controls.classifier and self._classifier is None:
             import litellm.exceptions as _le
 
+            self._record_decision(
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "phase": "pre_call",
+                    "session_id": session.ref,
+                    "agent": caller.agent,
+                    "request_id": request_id,
+                    "mode": self.config.mode,
+                    "level": self.config.level,
+                    "controls": self._controls.summary(),
+                    "risk_score": 1.0,
+                    "risk_level": "critical",
+                    "route": "block",
+                    "latency_ms": round((time.perf_counter() - t0) * 1000, 3),
+                    "features": {},
+                    "action": "block",
+                    "enforce": True,
+                    "matched_rules": ["classifier_unavailable"],
+                },
+                data,
+                user_api_key_dict,
+            )
             raise _le.BadRequestError(
                 message=(
                     "SecureLiteLLM: classifier is required but not configured. "
@@ -769,7 +959,7 @@ class RouterHook(CustomLogger):
         tool_context = extract_tool_context(messages)
         latency_ms = round((time.perf_counter() - t0) * 1000, 3)
 
-        self.decision_logger.emit(
+        self._record_decision(
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "phase": "pre_call",
@@ -791,7 +981,9 @@ class RouterHook(CustomLogger):
                 "enforce": self.config.enforce,
                 "latency_ms": latency_ms,
                 "tool_context": tool_context,
-            }
+            },
+            data,
+            user_api_key_dict,
         )
 
         # Audit mode: log action but always pass through
@@ -847,7 +1039,12 @@ class RouterHook(CustomLogger):
             return await self._post_call(user_api_key_dict, data, response)
         except SessionStoreUnavailable as exc:
             # The response is not released: its tool calls were never checked.
-            raise self._store_outage(exc, "post_call", data, user_api_key_dict) from exc
+            error = self._store_outage(exc, "post_call", data, user_api_key_dict)
+            self._attach_decision_error(error, data, user_api_key_dict)
+            raise error from exc
+        except Exception as exc:
+            self._attach_decision_error(exc, data, user_api_key_dict)
+            raise
 
     def _pre_call_stripped_tools(self, data: dict) -> bool:
         """Whether the pre-call route removed this request's tools."""
@@ -1018,7 +1215,7 @@ class RouterHook(CustomLogger):
                     "expires_in_seconds": int(self._approvals.ttl),
                 }
 
-        self.decision_logger.emit(
+        self._record_decision(
             {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "phase": "post_call",
@@ -1044,7 +1241,9 @@ class RouterHook(CustomLogger):
                     "generated_tool_call_count": len(generated_calls),
                     "generated_tool_calls": [_public_sink(call) for call in generated_calls],
                 },
-            }
+            },
+            data,
+            user_api_key_dict,
         )
 
         if not self.config.enforce or final_action == "execute":
@@ -1068,6 +1267,7 @@ class RouterHook(CustomLogger):
             risk_score,
             matched_rules or [f"route {route.name}"],
             pending=pending_id is not None,
+            detailed=self._detailed_decisions(user_api_key_dict),
         )
 
     # ------------------------------------------------------------------
@@ -1383,15 +1583,14 @@ def _hold_response_tool_calls(
     risk_score: float,
     matched_rules: list[str],
     pending: bool = False,
+    detailed: bool = True,
 ) -> Any:
     """Return a copy of a response with generated tool calls removed."""
     held = copy.deepcopy(response)
     reason = ", ".join(matched_rules) or "policy review"
     purpose = "approval" if pending else "review"
-    notice = (
-        f"SecureLiteLLM held the generated tool call for {purpose} "
-        f"(risk={risk_score:.3f}; rules={reason})."
-    )
+    detail = f" (risk={risk_score:.3f}; rules={reason})" if detailed else ""
+    notice = f"SecureLiteLLM held the generated tool call for {purpose}{detail}."
 
     for choice in getattr(held, "choices", None) or []:
         message = getattr(choice, "message", None)
@@ -1523,6 +1722,41 @@ def _proxy_app_and_auth() -> tuple[Any, Any]:
 # app id -> the hook its approval routes serve. Routes are added once per app;
 # a later hook instance (tests) takes them over.
 _APPROVAL_ROUTE_HOOKS: dict[int, "RouterHook"] = {}
+_DECISION_ROUTE_HOOKS: WeakKeyDictionary[Any, "RouterHook"] = WeakKeyDictionary()
+
+
+def register_decision_routes(app: Any, auth_dependency: Any, hook: "RouterHook") -> None:
+    """Authenticated history; normal keys cannot inspect classifier feedback by default."""
+    first = app not in _DECISION_ROUTE_HOOKS
+    _DECISION_ROUTE_HOOKS[app] = hook
+    if not first:
+        return
+    from fastapi import Depends, HTTPException, Query
+
+    async def history(
+        session: str = Query(pattern=r"^[0-9a-f]{16}$"),
+        auth: Any = Depends(auth_dependency),
+    ) -> dict:
+        current = _DECISION_ROUTE_HOOKS[app]
+        admin = _role(auth) in _VIEWING_ROLES
+        owner = _api_key_owner(auth)
+        if not admin and not (current.config.expose_decisions and owner):
+            raise HTTPException(403, "only an admin can view decision history")
+        try:
+            records = await asyncio.to_thread(
+                current._decision_history.read, session, None if admin else owner
+            )
+        except SessionStoreUnavailable as exc:
+            raise HTTPException(503, "decision history is unavailable") from exc
+        return {
+            "decisions": records,
+            "session_id": session,
+            "retention_seconds": 3600,
+            "limit": 300,
+            "backend": current._decision_history.backend,
+        }
+
+    app.add_api_route(DECISIONS_PATH, history, methods=["GET"])
 
 
 def register_approval_routes(app: Any, auth_dependency: Any, hook: "RouterHook") -> None:
@@ -1579,3 +1813,5 @@ def register_approval_routes(app: Any, auth_dependency: Any, hook: "RouterHook")
 
 # Module-level instance — LiteLLM config callbacks must point at an instance, not a class.
 proxy_handler_instance = RouterHook()
+if getattr(sys.modules.get("litellm.proxy.proxy_server"), "app", None) is not None:
+    proxy_handler_instance.register_proxy_routes()

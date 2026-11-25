@@ -482,7 +482,8 @@ async def test_hardened_holds_sinks_even_when_post_call_scores_low(monkeypatch, 
     held = await hook.async_post_call_success_hook(MagicMock(), data, _tool_response())
 
     assert held.choices[0].message.tool_calls is None
-    assert "route hardened" in held.choices[0].message.content
+    assert "held the generated tool call" in held.choices[0].message.content
+    assert "route hardened" not in held.choices[0].message.content  # admin-only detail
     record = _records(log_path)[-1]
     assert record["phase"] == "post_call"
     assert (record["pre_call_risk_level"], record["assessed_risk_level"]) == ("elevated", "low")
